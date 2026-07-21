@@ -118,14 +118,6 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "0.0"))
 	float BaseTurnRate = 200.0f;
 
-	// How much top speed cuts the turn rate (0..1). 0.5 = half turn rate at MaximumSpeed.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float SpeedTurnReduction = 0.5f;
-
-	// Floor on the speed factor: the turn rate never drops below this fraction of base.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float TurnSpeedFloor = 0.2f;
-
 	// How fast the yaw rate eases toward its target (input lag / settle, higher = snappier).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "0.1"))
 	float YawResponsiveness = 3.0f;
@@ -145,11 +137,6 @@ protected:
 	// Turn-induced speed loss: extra surge drag from drift + helm while maneuvering.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "0.0"))
 	float TurnDragFactor = 0.6f;
-
-	// Hard safety cap on rotation (deg/s). Keep >= BaseTurnRate or it masks the speed
-	// scaling -- if this is below the target yaw rate, every speed clamps to the same value.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "0.0"))
-	float MaxYawRate = 400.0f;
 #pragma endregion
 
 #pragma region Feedback

@@ -120,7 +120,6 @@ void ABoat::UpdateSteering(float DeltaTime)
 	// --- Yaw: ease toward a target rate (full at rest, slower with speed). ---
 	const float SwayForce = GetRudderSwayForce();   // cm/s^2, side kick that drives the drift
 	YawRate = FMath::FInterpTo(YawRate, GetTargetYawRate(), DeltaTime, YawResponsiveness);
-	YawRate = FMath::Clamp(YawRate, -MaxYawRate, MaxYawRate);
 
 	// r in rad/s for the rotating-frame coupling that curves the path (drift while moving).
 	const float YawRateRad = FMath::DegreesToRadians(YawRate);
@@ -238,11 +237,13 @@ float ABoat::GetTargetYawRate() const
 		? FMath::Clamp(RudderAngle / MaxRudderAngle, -1.0f, 1.0f)
 		: 0.0f;
 
-	// Faster boat = lazier turn. Full authority at rest, floored so it never dies.
+	// Faster boat = lazier turn. Full BaseTurnRate at rest, linearly reduced
+	// toward a floor as speed climbs to MaximumSpeed (a wide turn stays possible).
+	constexpr float MinSpeedFactor = 0.15f;
 	const float SpeedNorm = (MaximumSpeed > KINDA_SMALL_NUMBER)
 		? FMath::Clamp(CurrentSpeed / MaximumSpeed, 0.0f, 1.0f)
 		: 0.0f;
-	const float SpeedFactor = FMath::Clamp(1.0f - SpeedTurnReduction * SpeedNorm, TurnSpeedFloor, 1.0f);
+	const float SpeedFactor = FMath::Lerp(1.0f, MinSpeedFactor, SpeedNorm);
 
 	// Heavier than reference -> ratio < 1 -> slower rotation at every speed.
 	const float WeightFactor = ReferenceWeight / Weight;
