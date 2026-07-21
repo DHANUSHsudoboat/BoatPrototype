@@ -203,8 +203,8 @@ protected:
 	// Current sway (lateral, +right) velocity (cm/s) -- the drift/sideslip of the hull.
 	float SwaySpeed = 0.0f;
 
-private:
-	// Wake the sim on input; sleep it when fully parked and not turning.
 	void WakeSimulation();
+	// Wake the sim on input; sleep it when fully parked and not turning.
 	bool ShouldSleep() const;
+	
 };

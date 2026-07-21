@@ -1,8 +1,11 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 
-#include "BoatGameMode.h"
-#include "Boat.h"
+
+#include "BoatPrototype/Public/BoatGameMode.h"
+
+
+#include "BoatPrototype/Public/Boat.h"
 #include "GameFramework/PlayerController.h"
 
 ABoatGameMode::ABoatGameMode()
