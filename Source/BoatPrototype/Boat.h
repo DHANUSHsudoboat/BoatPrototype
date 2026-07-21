@@ -7,13 +7,21 @@
 #include "Boat.generated.h"
 
 /**
- * Generic drivable boat pawn (kinematic movement + force-style steering).
+ * Generic drivable boat pawn (turn-in-place steering + drift).
  *
- * Forward motion is kinematic: speed eases toward the current gear's target and
- * the actor is translated along its facing. Steering is modelled as a turning
- * FORCE rather than a fixed radius: steer input applies an angular acceleration
- * that scales with the boat's current speed, and water drag decays the yaw rate
- * back to zero when you let go. Slow boat = weak turn, fast boat = strong turn.
+ * Forward drive stays kinematic: surge speed eases toward the current gear's
+ * target. Steering is twin-screw / thruster style rather than rudder-gated:
+ *
+ *   full turn authority at ZERO speed (the boat pivots in place) -> going faster
+ *   REDUCES the turn rate (fast = lazy heading change) -> a heavier hull turns
+ *   slower at every speed. The helm sets a target yaw rate the boat eases toward.
+ *
+ * While making way the hull still drifts: a body-frame sway velocity slides the
+ * boat outboard through the turn (curved arc). At zero speed the drift term falls
+ * to zero, so the boat simply spins on the spot.
+ *
+ * State integrated each Tick -- surge (u, CurrentSpeed), sway (v, SwaySpeed),
+ * yaw rate (r, YawRate) -- plus a helm angle smoothed toward the input.
  *
  * Designed as a base class: the sim steps and derived values are small virtual
  * methods subclasses override without touching the loop.
@@ -61,13 +69,13 @@ protected:
 
 	// Target speed for each gear (cm/s). Gear 0 is always 0.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Gears")
-	float Gear1Speed = 150.0f;
+	float Gear1Speed = 75.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Gears")
-	float Gear2Speed = 275.0f;
+	float Gear2Speed = 130.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Gears")
-	float Gear3Speed = 400.0f;
+	float Gear3Speed = 200.0f;
 #pragma endregion
 
 #pragma region Speed
@@ -77,15 +85,15 @@ protected:
 
 	// Hard cap on speed (cm/s). Independent of weight — every boat can reach this.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Speed")
-	float MaximumSpeed = 400.0f;
+	float MaximumSpeed = 200.0f;
 
 	// Base rate the boat speeds up toward a higher gear (cm/s^2). Weight-scaled.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Speed")
-	float AccelerationRate = 300.0f;
+	float AccelerationRate = 150.0f;
 
 	// Base rate the boat slows down toward a lower gear (cm/s^2). Weight-scaled.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Speed")
-	float DecelerationRate = 500.0f;
+	float DecelerationRate = 250.0f;
 #pragma endregion
 
 #pragma region Physical
@@ -106,17 +114,42 @@ protected:
 #pragma endregion
 
 #pragma region Steering
-	// Rudder strength: angular acceleration (deg/s^2) applied by full steer at full speed.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering")
-	float TurnForce = 120.0f;
-
-	// Water drag on yaw: how quickly the turn rate decays back to zero when you release.
+	// Yaw rate at full helm, ZERO speed, reference weight (deg/s). The turn-in-place rate.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "0.0"))
-	float TurnDamping = 2.5f;
+	float BaseTurnRate = 200.0f;
 
-	// Cap on how fast the boat can rotate (deg/s).
+	// How much top speed cuts the turn rate (0..1). 0.5 = half turn rate at MaximumSpeed.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float SpeedTurnReduction = 0.5f;
+
+	// Floor on the speed factor: the turn rate never drops below this fraction of base.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float TurnSpeedFloor = 0.2f;
+
+	// How fast the yaw rate eases toward its target (input lag / settle, higher = snappier).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "0.1"))
+	float YawResponsiveness = 3.0f;
+
+	// Full-helm angle (deg). The input eases toward +/- this; only smooths the helm feel.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "1.0", ClampMax = "180.0"))
+	float MaxRudderAngle = 35.0f;
+
+	// How fast the helm swings toward the input (deg/s). Not instant.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "1.0"))
+	float RudderSpeed = 90.0f;
+
+	// Lateral hull resistance: how hard the hull fights sideways motion. High = little drift.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "0.0"))
-	float MaxYawRate = 45.0f;
+	float SwayDrag = 3.0f;
+
+	// Turn-induced speed loss: extra surge drag from drift + helm while maneuvering.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "0.0"))
+	float TurnDragFactor = 0.6f;
+
+	// Hard safety cap on rotation (deg/s). Keep >= BaseTurnRate or it masks the speed
+	// scaling -- if this is below the target yaw rate, every speed clamps to the same value.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "0.0"))
+	float MaxYawRate = 400.0f;
 #pragma endregion
 
 #pragma region Feedback
@@ -161,18 +194,27 @@ protected:
 	virtual float GetAccelerationRate() const;
 	virtual float GetDecelerationRate() const;
 
-	// Turning force this frame as angular acceleration (deg/s^2): steer * speed * width * weight.
-	virtual float GetTurnAcceleration() const;
+	// Target yaw rate this frame (deg/s): full at rest, reduced by speed, scaled by weight.
+	virtual float GetTargetYawRate() const;
+
+	// Sway (lateral) acceleration from the helm side kick (cm/s^2). Drives the drift arc.
+	virtual float GetRudderSwayForce() const;
 
 	// Play the gear-change camera shake. Override to add sound/FX.
 	virtual void PlayGearShake();
 #pragma endregion
 
-	// -1 = left, +1 = right, 0 = straight. Set from input.
+	// -1 = left, +1 = right, 0 = straight. Set from input (the helm order).
 	float SteerInput = 0.0f;
 
-	// Current yaw rate (deg/s), built up by the turning force and decayed by drag.
+	// Current rudder angle (deg). Swings toward SteerInput * MaxRudderAngle at RudderSpeed.
+	float RudderAngle = 0.0f;
+
+	// Current yaw rate (deg/s), built by the rudder moment and settled by yaw damping.
 	float YawRate = 0.0f;
+
+	// Current sway (lateral, +right) velocity (cm/s) -- the drift/sideslip of the hull.
+	float SwaySpeed = 0.0f;
 
 private:
 	// Wake the sim on input; sleep it when fully parked and not turning.

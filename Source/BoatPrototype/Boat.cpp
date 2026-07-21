@@ -113,12 +113,33 @@ void ABoat::UpdateSpeed(float DeltaTime)
 
 void ABoat::UpdateSteering(float DeltaTime)
 {
-	// Turning FORCE -> angular acceleration (scales with speed), then water drag on the yaw rate.
-	const float TurnAccel = GetTurnAcceleration();
-	YawRate += TurnAccel * DeltaTime;
-	YawRate -= YawRate * TurnDamping * DeltaTime;      // water resistance settles the turn
+	// --- Helm swing: the input eases toward a smoothed helm angle. ---
+	const float TargetRudder = SteerInput * MaxRudderAngle;
+	RudderAngle = FMath::FInterpConstantTo(RudderAngle, TargetRudder, DeltaTime, RudderSpeed);
+
+	// --- Yaw: ease toward a target rate (full at rest, slower with speed). ---
+	const float SwayForce = GetRudderSwayForce();   // cm/s^2, side kick that drives the drift
+	YawRate = FMath::FInterpTo(YawRate, GetTargetYawRate(), DeltaTime, YawResponsiveness);
 	YawRate = FMath::Clamp(YawRate, -MaxYawRate, MaxYawRate);
 
+	// r in rad/s for the rotating-frame coupling that curves the path (drift while moving).
+	const float YawRateRad = FMath::DegreesToRadians(YawRate);
+
+	// --- Sway: rudder side kick + centripetal coupling - lateral hull drag. ---
+	// Wider hull grips the water sideways harder (more lateral resistance).
+	const float WidthFactor = Width / ReferenceWidth;
+	const float SwayAccel = SwayForce
+		- YawRateRad * CurrentSpeed                               // -r*u : centripetal coupling
+		- SwayDrag * SwaySpeed * WidthFactor;                    // lateral hull resistance
+	SwaySpeed += SwayAccel * DeltaTime;
+
+	// --- Surge feedback: centripetal +r*v, minus turn-induced speed loss. ---
+	const float TurnDrag = TurnDragFactor
+		* (FMath::Abs(SwaySpeed) + FMath::Abs(FMath::Sin(FMath::DegreesToRadians(RudderAngle))) * FMath::Abs(CurrentSpeed));
+	CurrentSpeed += (YawRateRad * SwaySpeed - TurnDrag) * DeltaTime;
+	CurrentSpeed = FMath::Clamp(CurrentSpeed, 0.0f, MaximumSpeed);
+
+	// --- Apply the heading change. ---
 	if (!FMath::IsNearlyZero(YawRate))
 	{
 		AddActorLocalRotation(FRotator(0.0f, YawRate * DeltaTime, 0.0f));
@@ -127,12 +148,14 @@ void ABoat::UpdateSteering(float DeltaTime)
 
 void ABoat::UpdateMovement(float DeltaTime)
 {
-	if (FMath::IsNearlyZero(CurrentSpeed))
+	if (FMath::IsNearlyZero(CurrentSpeed) && FMath::IsNearlyZero(SwaySpeed))
 	{
 		return;
 	}
 
-	const FVector Delta = GetActorForwardVector() * CurrentSpeed * DeltaTime;
+	// Travel along the hull axes: forward surge + lateral sway = the drifting arc.
+	const FVector Delta = (GetActorForwardVector() * CurrentSpeed
+		+ GetActorRightVector() * SwaySpeed) * DeltaTime;
 	AddActorWorldOffset(Delta, false);
 }
 
@@ -208,18 +231,38 @@ float ABoat::GetDecelerationRate() const
 	return DecelerationRate * (ReferenceWeight / Weight);
 }
 
-float ABoat::GetTurnAcceleration() const
+float ABoat::GetTargetYawRate() const
 {
-	// A rudder only bites while making way: turning force scales with speed.
-	const float SpeedFactor = (MaximumSpeed > KINDA_SMALL_NUMBER)
-		? FMath::Clamp(CurrentSpeed / MaximumSpeed, 0.0f, 1.0f)
+	// Helm demand, -1..+1 (smoothed input).
+	const float Helm = (MaxRudderAngle > KINDA_SMALL_NUMBER)
+		? FMath::Clamp(RudderAngle / MaxRudderAngle, -1.0f, 1.0f)
 		: 0.0f;
 
-	// Wider hull weakens the turn; heavier boat resists rotating.
-	const float WidthFactor = ReferenceWidth / Width;
+	// Faster boat = lazier turn. Full authority at rest, floored so it never dies.
+	const float SpeedNorm = (MaximumSpeed > KINDA_SMALL_NUMBER)
+		? FMath::Clamp(CurrentSpeed / MaximumSpeed, 0.0f, 1.0f)
+		: 0.0f;
+	const float SpeedFactor = FMath::Clamp(1.0f - SpeedTurnReduction * SpeedNorm, TurnSpeedFloor, 1.0f);
+
+	// Heavier than reference -> ratio < 1 -> slower rotation at every speed.
 	const float WeightFactor = ReferenceWeight / Weight;
 
-	return SteerInput * TurnForce * SpeedFactor * WidthFactor * WeightFactor;
+	return Helm * BaseTurnRate * WeightFactor * SpeedFactor;
+}
+
+float ABoat::GetRudderSwayForce() const
+{
+	// Stern kick that seeds the drift: scales with helm and with water flow^2, so it
+	// only bites while making way (no lateral kick at rest -> clean pivot).
+	// +helm to starboard kicks the stern outboard to port.
+	const float FlowNorm = (MaximumSpeed > KINDA_SMALL_NUMBER)
+		? CurrentSpeed / MaximumSpeed
+		: 0.0f;
+	const float Flow2 = FlowNorm * FMath::Abs(FlowNorm);
+	const float SideForce = FMath::Sin(FMath::DegreesToRadians(RudderAngle)) * Flow2;
+
+	// Lateral acceleration proportional to steering authority and top speed.
+	return -0.15f * BaseTurnRate * SideForce * (MaximumSpeed / 100.0f);
 }
 
 void ABoat::PlayGearShake()
@@ -249,5 +292,7 @@ bool ABoat::ShouldSleep() const
 	return FMath::IsNearlyZero(CurrentSpeed)
 		&& FMath::IsNearlyZero(GetTargetSpeed())
 		&& FMath::IsNearlyZero(YawRate)
+		&& FMath::IsNearlyZero(SwaySpeed)
+		&& FMath::IsNearlyZero(RudderAngle)
 		&& FMath::IsNearlyZero(SteerInput);
 }
