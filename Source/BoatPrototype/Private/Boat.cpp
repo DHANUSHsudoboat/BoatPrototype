@@ -79,6 +79,8 @@ void ABoat::BeginPlay()
 {
 	Super::BeginPlay();
 
+	CurrentHitPoints = MaxHitPoints;
+
 	if (BroadsideGuideMaterial)
 	{
 		PortGuideMesh->SetMaterial(0, BroadsideGuideMaterial);
@@ -365,6 +367,45 @@ void ABoat::UpdateBroadsideGuides()
 	// Starboard guide on the right (positive Y).
 	StarboardGuideMesh->SetRelativeLocation(FVector(0.0f, Offset, SurfaceZOffset));
 	StarboardGuideMesh->SetRelativeScale3D(FVector(BroadsideGuideWidth / PlaneUnit, Range / PlaneUnit, 1.0f));
+}
+
+void ABoat::AdjustCameraZoom(float DeltaZoom)
+{
+	if (!SpringArm)
+	{
+		return;
+	}
+
+	// Clamp the new arm length within min/max bounds.
+	float NewArmLength = SpringArm->TargetArmLength + DeltaZoom;
+	NewArmLength = FMath::Clamp(NewArmLength, MinSpringArmLength, MaxSpringArmLength);
+	SpringArm->TargetArmLength = NewArmLength;
+
+	// Calculate lerp factor: 0 at min zoom, 1 at max zoom.
+	const float ArmLengthRange = MaxSpringArmLength - MinSpringArmLength;
+	const float LerpAlpha = (ArmLengthRange > KINDA_SMALL_NUMBER)
+		? (NewArmLength - MinSpringArmLength) / ArmLengthRange
+		: 0.0f;
+
+	// Interpolate camera pitch between min/max rotations.
+	const float NewCameraPitch = FMath::Lerp(CameraRotationAtMinZoom, CameraRotationAtMaxZoom, LerpAlpha);
+	SpringArm->SetRelativeRotation(FRotator(NewCameraPitch, 0.0f, 0.0f));
+}
+
+void ABoat::ApplyBulletHit(AActor* HitInstigator)
+{
+	CurrentHitPoints = FMath::Max(0, CurrentHitPoints - 1);
+
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Red,
+			FString::Printf(TEXT("%s hit! %d/%d"), *GetName(), CurrentHitPoints, MaxHitPoints));
+	}
+
+	if (CurrentHitPoints <= 0)
+	{
+		Destroy();
+	}
 }
 
 // ---------------------------------------------------------------------

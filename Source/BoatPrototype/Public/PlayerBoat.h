@@ -28,13 +28,21 @@ public:
 
 	void OnAimPressed();
 	void OnAimReleased();
+	void OnMouseScroll(float Value);
 
 protected:
 	void OnRightMousePressed();
 	void OnRightMouseReleased();
 	void UpdateAimSideFromMouse();
+	void FireBroadside(bool bStarboardSide);
 
 	bool bIsAiming = false;
+	bool bAimingStarboard = false;
+
+	// Bullet class to spawn on fire. Defaults to ABulletActor; override with
+	// a Blueprint subclass for custom art.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat")
+	TSubclassOf<class ABulletActor> BulletClass;
 
 	// Compass HUD riding on the boat. Attached to root but rotation is absolute,
 	// so the dial face doesn't spin with the hull as it turns. Hidden by default,

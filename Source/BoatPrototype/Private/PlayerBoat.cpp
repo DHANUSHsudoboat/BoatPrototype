@@ -3,6 +3,7 @@
 #include "BoatPrototype/Public/PlayerBoat.h"
 #include "BoatPrototype/Public/BoatBrainComponent.h"
 #include "BoatPrototype/Public/Widgets/PlayerBoatCompass.h"
+#include "BoatPrototype/Public/BulletActor.h"
 
 #include "Components/InputComponent.h"
 #include "Components/WidgetComponent.h"
@@ -21,6 +22,9 @@ APlayerBoat::APlayerBoat()
 
 	// Brain that steers toward the mouse when enabled (RMB held).
 	Brain = CreateDefaultSubobject<UBoatBrainComponent>(TEXT("Brain"));
+
+	// Default bullet class.
+	BulletClass = ABulletActor::StaticClass();
 }
 
 void APlayerBoat::Tick(float DeltaTime)
@@ -33,6 +37,26 @@ void APlayerBoat::Tick(float DeltaTime)
 	{
 		SteerInput = Brain->ComputeMouseSteerInput(this);
 	}
+
+	// Poll mouse scroll wheel for camera zoom.
+	if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+	{
+		float ScrollInput = 0.0f;
+		ScrollInput = PC->GetInputAnalogKeyState(EKeys::MouseScrollUp);
+		if (!FMath::IsNearlyZero(ScrollInput))
+		{
+			OnMouseScroll(ScrollInput);
+		}
+		else
+		{
+			ScrollInput = PC->GetInputAnalogKeyState(EKeys::MouseScrollDown);
+			if (!FMath::IsNearlyZero(ScrollInput))
+			{
+				OnMouseScroll(-ScrollInput);
+			}
+		}
+	}
+
 	Super::Tick(DeltaTime);
 }
 
@@ -43,6 +67,14 @@ void APlayerBoat::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Released, this, &APlayerBoat::OnRightMouseReleased);
 	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &APlayerBoat::OnAimPressed);
 	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &APlayerBoat::OnAimReleased);
+}
+
+void APlayerBoat::OnMouseScroll(float Value)
+{
+	// Value is 1.0 for scroll up, -1.0 for scroll down.
+	// 50cm per tick.
+	constexpr float ZoomSensitivity = 50.0f;
+	AdjustCameraZoom(Value * ZoomSensitivity);
 }
 
 void APlayerBoat::SteerLeftPressed()
@@ -92,6 +124,10 @@ void APlayerBoat::OnAimPressed()
 
 void APlayerBoat::OnAimReleased()
 {
+	if (bIsAiming)
+	{
+		FireBroadside(bAimingStarboard);
+	}
 	bIsAiming = false;
 	SetPortGuideVisible(false);
 	SetStarboardGuideVisible(false);
@@ -112,7 +148,28 @@ void APlayerBoat::UpdateAimSideFromMouse()
 	const float T = (BoatLocation.Z - RayOrigin.Z) / RayDirection.Z;
 	const FVector MouseWorldPos = RayOrigin + RayDirection * T;
 
-	const bool bStarboardSide = FVector::DotProduct(MouseWorldPos - BoatLocation, GetActorRightVector()) > 0.0f;
-	SetStarboardGuideVisible(bStarboardSide);
-	SetPortGuideVisible(!bStarboardSide);
+	bAimingStarboard = FVector::DotProduct(MouseWorldPos - BoatLocation, GetActorRightVector()) > 0.0f;
+	SetStarboardGuideVisible(bAimingStarboard);
+	SetPortGuideVisible(!bAimingStarboard);
+}
+
+void APlayerBoat::FireBroadside(bool bStarboardSide)
+{
+	if (!BulletClass)
+	{
+		return;
+	}
+
+	const FVector FireDirection = bStarboardSide ? GetActorRightVector() : -GetActorRightVector();
+	const FVector SpawnLocation = GetActorLocation() + FireDirection * (Width * 0.5f);
+	const FRotator SpawnRotation = FireDirection.Rotation();
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Owner = this;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	if (ABulletActor* Bullet = GetWorld()->SpawnActor<ABulletActor>(BulletClass, SpawnLocation, SpawnRotation, SpawnParams))
+	{
+		Bullet->FireInDirection(FireDirection, GetFiringRange());
+	}
 }

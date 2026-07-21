@@ -37,6 +37,10 @@ public:
 	virtual void Tick(float DeltaTime) override;
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
+	// Called by a bullet on impact. Destroys the boat once hits reach MaxHitPoints.
+	UFUNCTION(BlueprintCallable, Category = "Boat|Combat")
+	void ApplyBulletHit(AActor* HitInstigator);
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -178,9 +182,39 @@ protected:
 	// Override for different ship classes' firing range.
 	virtual float GetFiringRange() const { return MaxFiringRange; }
 
+	// Hits before the boat is destroyed.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat", meta = (ClampMin = "1"))
+	int32 MaxHitPoints = 2;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat|Combat")
+	int32 CurrentHitPoints = 2;
+
+	
 protected:
 	// Refresh guide mesh size/transform from current range/width. Called each Tick.
 	virtual void UpdateBroadsideGuides();
+#pragma endregion
+
+#pragma region Camera
+	// Min spring arm length (cm). Scroll wheel zooms between this and max.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Camera", meta = (ClampMin = "100.0"))
+	float MinSpringArmLength = 500.0f;
+
+	// Max spring arm length (cm).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Camera", meta = (ClampMin = "100.0"))
+	float MaxSpringArmLength = 1500.0f;
+
+	// Camera rotation at min spring arm length (deg). Typically more tilted down (-45).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Camera")
+	float CameraRotationAtMinZoom = -45.0f;
+
+	// Camera rotation at max spring arm length (deg). Typically more top-down (-90).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Camera")
+	float CameraRotationAtMaxZoom = -90.0f;
+
+	// Adjust spring arm length by this amount per scroll wheel tick (cm).
+	UFUNCTION(BlueprintCallable, Category = "Boat|Camera")
+	void AdjustCameraZoom(float DeltaZoom);
 #pragma endregion
 
 #pragma region Feedback
