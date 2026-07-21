@@ -37,9 +37,9 @@ public:
 	virtual void Tick(float DeltaTime) override;
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
-	// Called by a bullet on impact. Destroys the boat once hits reach MaxHitPoints.
+	// Called by a bullet on impact. Destroys the boat once health reaches zero.
 	UFUNCTION(BlueprintCallable, Category = "Boat|Combat")
-	void ApplyBulletHit(AActor* HitInstigator);
+	void ApplyBulletHit(AActor* HitInstigator, float DamageAmount);
 
 	// Getter for current gear.
 	UFUNCTION(BlueprintCallable, Category = "Boat|Gears")
@@ -48,6 +48,10 @@ public:
 	// Getter for current speed.
 	UFUNCTION(BlueprintCallable, Category = "Boat|Speed")
 	FORCEINLINE float GetCurrentSpeed() const { return CurrentSpeed; }
+
+	// Getter for health as 0..1 fraction.
+	UFUNCTION(BlueprintCallable, Category = "Boat|Combat")
+	FORCEINLINE float GetHealthPercent() const { return (MaxHealth > KINDA_SMALL_NUMBER) ? FMath::Clamp(CurrentHealth / MaxHealth, 0.0f, 1.0f) : 0.0f; }
 
 protected:
 	virtual void BeginPlay() override;
@@ -81,6 +85,10 @@ protected:
 	// Starboard (right) broadside aiming guide.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat|Components")
 	class UStaticMeshComponent* StarboardGuideMesh;
+
+	// Health display widget mounted on the boat.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat|Components")
+	class UWidgetComponent* HealthWidget;
 #pragma endregion
 
 #pragma region Gears
@@ -190,12 +198,12 @@ protected:
 	// Override for different ship classes' firing range.
 	virtual float GetFiringRange() const { return MaxFiringRange; }
 
-	// Hits before the boat is destroyed.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat", meta = (ClampMin = "1"))
-	int32 MaxHitPoints = 2;
+	// Max health (HP).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat", meta = (ClampMin = "1.0"))
+	float MaxHealth = 100.0f;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat|Combat")
-	int32 CurrentHitPoints = 2;
+	float CurrentHealth = 100.0f;
 
 	
 protected:

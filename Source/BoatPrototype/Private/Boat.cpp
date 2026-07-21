@@ -2,10 +2,12 @@
 
 
 #include "BoatPrototype/Public/Boat.h"
+#include "BoatPrototype/Public/Widgets/BoatHealthWidget.h"
 
 #include "Components/StaticMeshComponent.h"
 #include "Components/ArrowComponent.h"
 #include "Components/InputComponent.h"
+#include "Components/WidgetComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Camera/CameraComponent.h"
 #include "GameFramework/PlayerController.h"
@@ -73,13 +75,19 @@ ABoat::ABoat()
 		PortGuideMesh->SetStaticMesh(GuidePlaneFinder.Object);
 		StarboardGuideMesh->SetStaticMesh(GuidePlaneFinder.Object);
 	}
+
+	// Health display widget mounted on the boat.
+	HealthWidget = CreateDefaultSubobject<UWidgetComponent>(TEXT("HealthWidget"));
+	HealthWidget->SetupAttachment(RootComponent);
+	HealthWidget->SetWidgetClass(UBoatHealthWidget::StaticClass());
+	HealthWidget->SetVisibility(true);
 }
 
 void ABoat::BeginPlay()
 {
 	Super::BeginPlay();
 
-	CurrentHitPoints = MaxHitPoints;
+	CurrentHealth = MaxHealth;
 
 	if (BroadsideGuideMaterial)
 	{
@@ -97,6 +105,15 @@ void ABoat::BeginPlay()
 	}
 
 	UpdateBroadsideGuides();
+
+	// Initialize health widget display.
+	if (HealthWidget)
+	{
+		if (UBoatHealthWidget* HealthWidgetUI = Cast<UBoatHealthWidget>(HealthWidget->GetUserWidgetObject()))
+		{
+			HealthWidgetUI->UpdateHealthDisplay(CurrentHealth / MaxHealth);
+		}
+	}
 }
 
 // ---------------------------------------------------------------------
@@ -392,17 +409,25 @@ void ABoat::AdjustCameraZoom(float DeltaZoom)
 	SpringArm->SetRelativeRotation(FRotator(NewCameraPitch, 0.0f, 0.0f));
 }
 
-void ABoat::ApplyBulletHit(AActor* HitInstigator)
+void ABoat::ApplyBulletHit(AActor* HitInstigator, float DamageAmount)
 {
-	CurrentHitPoints = FMath::Max(0, CurrentHitPoints - 1);
+	CurrentHealth = FMath::Max(0.0f, CurrentHealth - DamageAmount);
 
+	// Initialize health widget display.
+	if (HealthWidget)
+	{
+		if (UBoatHealthWidget* HealthWidgetUI = Cast<UBoatHealthWidget>(HealthWidget->GetUserWidgetObject()))
+		{
+			HealthWidgetUI->UpdateHealthDisplay(CurrentHealth / MaxHealth);
+		}
+	}
 	if (GEngine)
 	{
 		GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Red,
-			FString::Printf(TEXT("%s hit! %d/%d"), *GetName(), CurrentHitPoints, MaxHitPoints));
+			FString::Printf(TEXT("%s hit! %.0f/%.0f HP"), *GetName(), CurrentHealth, MaxHealth));
 	}
 
-	if (CurrentHitPoints <= 0)
+	if (CurrentHealth <= 0.0f)
 	{
 		Destroy();
 	}

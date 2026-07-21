@@ -67,7 +67,7 @@ void ABulletActor::OnHit(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrim
 	// If we hit a boat, apply damage.
 	if (ABoat* HitBoat = Cast<ABoat>(OtherActor))
 	{
-		HitBoat->ApplyBulletHit(this);
+		HitBoat->ApplyBulletHit(this, Damage);
 	}
 
 	// Destroy the bullet on any blocking hit.
