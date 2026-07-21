@@ -10,6 +10,7 @@
 #include "Camera/CameraComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "Engine/StaticMesh.h"
 
 // Sets default values
 ABoat::ABoat()
@@ -49,11 +50,51 @@ ABoat::ABoat()
 	// Follow camera at the end of the boom.
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(SpringArm, USpringArmComponent::SocketName);
+
+	// Port (left) broadside aiming guide -- flat plane mesh (not a decal, since
+	// deferred decals can't render on translucent water).
+	PortGuideMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PortGuideMesh"));
+	PortGuideMesh->SetupAttachment(RootComponent);
+	PortGuideMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	PortGuideMesh->SetCastShadow(false);
+	PortGuideMesh->SetVisibility(false);
+
+	// Starboard (right) broadside aiming guide.
+	StarboardGuideMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("StarboardGuideMesh"));
+	StarboardGuideMesh->SetupAttachment(RootComponent);
+	StarboardGuideMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	StarboardGuideMesh->SetCastShadow(false);
+	StarboardGuideMesh->SetVisibility(false);
+
+	// Load the built-in plane mesh for both guides.
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> GuidePlaneFinder(TEXT("/Engine/BasicShapes/Plane.Plane"));
+	if (GuidePlaneFinder.Succeeded())
+	{
+		PortGuideMesh->SetStaticMesh(GuidePlaneFinder.Object);
+		StarboardGuideMesh->SetStaticMesh(GuidePlaneFinder.Object);
+	}
 }
 
 void ABoat::BeginPlay()
 {
 	Super::BeginPlay();
+
+	if (BroadsideGuideMaterial)
+	{
+		PortGuideMesh->SetMaterial(0, BroadsideGuideMaterial);
+		StarboardGuideMesh->SetMaterial(0, BroadsideGuideMaterial);
+
+		if (UMaterialInstanceDynamic* MID = PortGuideMesh->CreateDynamicMaterialInstance(0))
+		{
+			MID->SetVectorParameterValue(TEXT("Color"), BroadsideGuideColor);
+		}
+		if (UMaterialInstanceDynamic* MID = StarboardGuideMesh->CreateDynamicMaterialInstance(0))
+		{
+			MID->SetVectorParameterValue(TEXT("Color"), BroadsideGuideColor);
+		}
+	}
+
+	UpdateBroadsideGuides();
 }
 
 // ---------------------------------------------------------------------
@@ -67,6 +108,7 @@ void ABoat::Tick(float DeltaTime)
 	UpdateSpeed(DeltaTime);
 	UpdateSteering(DeltaTime);
 	UpdateMovement(DeltaTime);
+	UpdateBroadsideGuides();
 
 	// On-screen HUD: current gear + speed.
 	if (bShowDebugHUD && GEngine)
@@ -278,6 +320,51 @@ void ABoat::PlayGearShake()
 	{
 		PC->ClientStartCameraShake(GearShake, GearShakeScale);
 	}
+}
+
+void ABoat::SetPortGuideVisible(bool bVisible)
+{
+	if (PortGuideMesh)
+	{
+		PortGuideMesh->SetVisibility(bVisible);
+	}
+}
+
+void ABoat::SetStarboardGuideVisible(bool bVisible)
+{
+	if (StarboardGuideMesh)
+	{
+		StarboardGuideMesh->SetVisibility(bVisible);
+	}
+}
+
+void ABoat::UpdateBroadsideGuides()
+{
+	if (!PortGuideMesh || !StarboardGuideMesh)
+	{
+		return;
+	}
+
+	// Early-out if neither guide is visible (cheap optimization).
+	if (!PortGuideMesh->IsVisible() && !StarboardGuideMesh->IsVisible())
+	{
+		return;
+	}
+
+	const float Range = GetFiringRange();
+	// Position guides so they span from hull edge (Width/2) outward to firing range.
+	// Offset = center of the quad position from ship centerline.
+	const float Offset = Width * 0.5f + Range * 0.5f;
+	constexpr float PlaneUnit = 100.0f; // Engine Plane mesh is 100x100cm at scale 1.
+	constexpr float SurfaceZOffset = 5.0f; // Just above water to avoid z-fighting.
+
+	// Port guide on the left (negative Y).
+	PortGuideMesh->SetRelativeLocation(FVector(0.0f, -Offset, SurfaceZOffset));
+	PortGuideMesh->SetRelativeScale3D(FVector(BroadsideGuideWidth / PlaneUnit, Range / PlaneUnit, 1.0f));
+
+	// Starboard guide on the right (positive Y).
+	StarboardGuideMesh->SetRelativeLocation(FVector(0.0f, Offset, SurfaceZOffset));
+	StarboardGuideMesh->SetRelativeScale3D(FVector(BroadsideGuideWidth / PlaneUnit, Range / PlaneUnit, 1.0f));
 }
 
 // ---------------------------------------------------------------------

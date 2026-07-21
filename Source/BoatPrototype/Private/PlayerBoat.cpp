@@ -6,6 +6,8 @@
 
 #include "Components/InputComponent.h"
 #include "Components/WidgetComponent.h"
+#include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
 
 APlayerBoat::APlayerBoat()
 {
@@ -23,6 +25,10 @@ APlayerBoat::APlayerBoat()
 
 void APlayerBoat::Tick(float DeltaTime)
 {
+	if (bIsAiming)
+	{
+		UpdateAimSideFromMouse();
+	}
 	if (Brain && Brain->IsMouseSteerEnabled())
 	{
 		SteerInput = Brain->ComputeMouseSteerInput(this);
@@ -35,6 +41,8 @@ void APlayerBoat::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &APlayerBoat::OnRightMousePressed);
 	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Released, this, &APlayerBoat::OnRightMouseReleased);
+	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &APlayerBoat::OnAimPressed);
+	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &APlayerBoat::OnAimReleased);
 }
 
 void APlayerBoat::SteerLeftPressed()
@@ -75,4 +83,36 @@ void APlayerBoat::OnRightMouseReleased()
 		Brain->SetMouseSteerEnabled(false);
 		SteerInput = 0;
 	}
+}
+
+void APlayerBoat::OnAimPressed()
+{
+	bIsAiming = true;
+}
+
+void APlayerBoat::OnAimReleased()
+{
+	bIsAiming = false;
+	SetPortGuideVisible(false);
+	SetStarboardGuideVisible(false);
+}
+
+void APlayerBoat::UpdateAimSideFromMouse()
+{
+	APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0);
+	if (!PC) { return; }
+
+	FVector RayOrigin, RayDirection;
+	if (!PC->DeprojectMousePositionToWorld(RayOrigin, RayDirection) || FMath::IsNearlyZero(RayDirection.Z))
+	{
+		return;
+	}
+
+	const FVector BoatLocation = GetActorLocation();
+	const float T = (BoatLocation.Z - RayOrigin.Z) / RayDirection.Z;
+	const FVector MouseWorldPos = RayOrigin + RayDirection * T;
+
+	const bool bStarboardSide = FVector::DotProduct(MouseWorldPos - BoatLocation, GetActorRightVector()) > 0.0f;
+	SetStarboardGuideVisible(bStarboardSide);
+	SetPortGuideVisible(!bStarboardSide);
 }

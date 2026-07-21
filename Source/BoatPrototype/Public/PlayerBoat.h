@@ -26,9 +26,15 @@ public:
 	virtual void SteerLeftPressed() override;
 	virtual void SteerRightPressed() override;
 
+	void OnAimPressed();
+	void OnAimReleased();
+
 protected:
 	void OnRightMousePressed();
 	void OnRightMouseReleased();
+	void UpdateAimSideFromMouse();
+
+	bool bIsAiming = false;
 
 	// Compass HUD riding on the boat. Attached to root but rotation is absolute,
 	// so the dial face doesn't spin with the hull as it turns. Hidden by default,

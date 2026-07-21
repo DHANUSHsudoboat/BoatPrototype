@@ -60,6 +60,15 @@ protected:
 	// Follow camera on the spring arm.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat|Components")
 	class UCameraComponent* FollowCamera;
+
+	// Port (left) broadside aiming guide -- flat plane mesh, not a decal (decals
+	// can't render on translucent water).
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat|Components")
+	class UStaticMeshComponent* PortGuideMesh;
+
+	// Starboard (right) broadside aiming guide.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat|Components")
+	class UStaticMeshComponent* StarboardGuideMesh;
 #pragma endregion
 
 #pragma region Gears
@@ -137,6 +146,41 @@ protected:
 	// Turn-induced speed loss: extra surge drag from drift + helm while maneuvering.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "0.0"))
 	float TurnDragFactor = 0.6f;
+#pragma endregion
+
+#pragma region Combat
+	// Max broadside firing range (cm) — also the guide line's length. Override
+	// GetFiringRange() per subclass for different ship classes.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat", meta = (ClampMin = "0.0"))
+	float MaxFiringRange = 3000.0f;
+
+	// Guide line thickness (cm).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat", meta = (ClampMin = "1.0"))
+	float BroadsideGuideWidth = 40.0f;
+
+	// Guide tint, read by the guide material's "Color" vector parameter.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat")
+	FLinearColor BroadsideGuideColor = FLinearColor::White;
+
+	// Translucent unlit material asset (must expose a "Color" vector param and
+	// fade Opacity along its length). Assign in the editor. NOT a decal material
+	// -- deferred decals can't render on translucent water, so guides are a
+	// flat plane mesh riding just above the water instead.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat")
+	class UMaterialInterface* BroadsideGuideMaterial;
+
+	UFUNCTION(BlueprintCallable, Category = "Boat|Combat")
+	void SetPortGuideVisible(bool bVisible);
+
+	UFUNCTION(BlueprintCallable, Category = "Boat|Combat")
+	void SetStarboardGuideVisible(bool bVisible);
+
+	// Override for different ship classes' firing range.
+	virtual float GetFiringRange() const { return MaxFiringRange; }
+
+protected:
+	// Refresh guide mesh size/transform from current range/width. Called each Tick.
+	virtual void UpdateBroadsideGuides();
 #pragma endregion
 
 #pragma region Feedback
