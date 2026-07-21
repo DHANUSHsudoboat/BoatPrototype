@@ -37,26 +37,6 @@ void APlayerBoat::Tick(float DeltaTime)
 	{
 		SteerInput = Brain->ComputeMouseSteerInput(this);
 	}
-
-	// Poll mouse scroll wheel for camera zoom.
-	if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
-	{
-		float ScrollInput = 0.0f;
-		ScrollInput = PC->GetInputAnalogKeyState(EKeys::MouseScrollUp);
-		if (!FMath::IsNearlyZero(ScrollInput))
-		{
-			OnMouseScroll(ScrollInput);
-		}
-		else
-		{
-			ScrollInput = PC->GetInputAnalogKeyState(EKeys::MouseScrollDown);
-			if (!FMath::IsNearlyZero(ScrollInput))
-			{
-				OnMouseScroll(-ScrollInput);
-			}
-		}
-	}
-
 	Super::Tick(DeltaTime);
 }
 
@@ -67,14 +47,22 @@ void APlayerBoat::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Released, this, &APlayerBoat::OnRightMouseReleased);
 	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &APlayerBoat::OnAimPressed);
 	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &APlayerBoat::OnAimReleased);
+	PlayerInputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this, &APlayerBoat::OnScrollUp);
+	PlayerInputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &APlayerBoat::OnScrollDown);
 }
 
-void APlayerBoat::OnMouseScroll(float Value)
+void APlayerBoat::OnScrollUp()
 {
-	// Value is 1.0 for scroll up, -1.0 for scroll down.
-	// 50cm per tick.
+	// Scroll up = zoom in (shorter arm).
 	constexpr float ZoomSensitivity = 50.0f;
-	AdjustCameraZoom(Value * ZoomSensitivity);
+	AdjustCameraZoom(-ZoomSensitivity);
+}
+
+void APlayerBoat::OnScrollDown()
+{
+	// Scroll down = zoom out (longer arm).
+	constexpr float ZoomSensitivity = 50.0f;
+	AdjustCameraZoom(ZoomSensitivity);
 }
 
 void APlayerBoat::SteerLeftPressed()

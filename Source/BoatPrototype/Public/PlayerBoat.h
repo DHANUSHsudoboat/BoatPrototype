@@ -28,7 +28,8 @@ public:
 
 	void OnAimPressed();
 	void OnAimReleased();
-	void OnMouseScroll(float Value);
+	void OnScrollUp();
+	void OnScrollDown();
 
 protected:
 	void OnRightMousePressed();
