@@ -41,6 +41,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Boat|Combat")
 	void ApplyBulletHit(AActor* HitInstigator);
 
+	// Getter for current gear.
+	UFUNCTION(BlueprintCallable, Category = "Boat|Gears")
+	FORCEINLINE int32 GetCurrentGear() const { return CurrentGear; }
+
+	// Getter for current speed.
+	UFUNCTION(BlueprintCallable, Category = "Boat|Speed")
+	FORCEINLINE float GetCurrentSpeed() const { return CurrentSpeed; }
+
 protected:
 	virtual void BeginPlay() override;
 
