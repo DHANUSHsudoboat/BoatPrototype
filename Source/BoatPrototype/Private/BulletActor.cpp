@@ -3,10 +3,11 @@
 #include "BoatPrototype/Public/BulletActor.h"
 
 #include "Components/SphereComponent.h"
-#include "Components/StaticMeshComponent.h"
 #include "GameFramework/ProjectileMovementComponent.h"
 #include "BoatPrototype/Public/Boat.h"
-#include "Engine/StaticMesh.h"
+#include "NiagaraSystem.h"
+#include "NiagaraFunctionLibrary.h"
+#include "NiagaraComponent.h"
 
 ABulletActor::ABulletActor()
 {
@@ -28,18 +29,6 @@ ABulletActor::ABulletActor()
 	CollisionComponent->OnComponentHit.AddDynamic(this, &ABulletActor::OnHit);
 	CollisionComponent->OnComponentBeginOverlap.AddDynamic(this, &ABulletActor::OnOverlap);
 
-	// Visual mesh.
-	BulletMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BulletMesh"));
-	BulletMesh->SetupAttachment(RootComponent);
-	BulletMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-
-	// Load the built-in sphere mesh.
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> BulletMeshFinder(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
-	if (BulletMeshFinder.Succeeded())
-	{
-	BulletMesh->SetStaticMesh(BulletMeshFinder.Object);
-	}
-
 	// Projectile movement (no gravity, constant velocity).
 	ProjectileMovement = CreateDefaultSubobject<UProjectileMovementComponent>(TEXT("ProjectileMovement"));
 	ProjectileMovement->SetUpdatedComponent(CollisionComponent);
@@ -57,6 +46,48 @@ void ABulletActor::FireInDirection(const FVector& Direction, float Range)
 		ProjectileMovement->Velocity = Direction.GetSafeNormal() * Speed;
 		// Vanish exactly at the firing range.
 		SetLifeSpan(FMath::Max(0.1f, Range / Speed));
+	}
+
+	SpawnMuzzleEffectBurst(Direction.GetSafeNormal());
+}
+
+void ABulletActor::SpawnMuzzleEffectBurst(const FVector& FireDirection)
+{
+	if (!MuzzleEffect)
+	{
+		return;
+	}
+
+	const FVector SpawnPoint = GetActorLocation();
+
+	// All instances launch together from the same point; each gets a slightly
+	// different direction within the cone, so the volley fans out wider the
+	// further it travels -- like a spread of cannonballs, not one straight line.
+	for (int32 i = 0; i < MuzzleEffectCount; ++i)
+	{
+		const FVector SpreadDirection = FMath::VRandCone(FireDirection, FMath::DegreesToRadians(MuzzleEffectSpreadAngle));
+		UNiagaraComponent* SpawnedComponent = UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), MuzzleEffect, SpawnPoint, SpreadDirection.Rotation());
+
+		// Auto-destroy only fires when the system finishes naturally -- a looping
+		// emitter never does, so force it to clean up after a fixed lifetime instead.
+		// The weak-lambda context must be the Niagara component itself, NOT the
+		// bullet: the bullet is usually Destroy()'d almost immediately (on impact or
+		// a short firing range), well before MuzzleEffectLifetime elapses. Binding to
+		// the bullet meant the cleanup callback silently refused to fire once the
+		// bullet was gone, orphaning the (independent, unattached) component forever.
+		if (SpawnedComponent)
+		{
+			TWeakObjectPtr<UNiagaraComponent> WeakComponent = SpawnedComponent;
+			FTimerHandle CleanupHandle;
+			GetWorldTimerManager().SetTimer(CleanupHandle, FTimerDelegate::CreateWeakLambda(SpawnedComponent, [WeakComponent]()
+			{
+				if (UNiagaraComponent* Comp = WeakComponent.Get())
+				{
+					Comp->Deactivate();
+					Comp->DestroyComponent();
+				}
+			}), MuzzleEffectLifetime, false);
+		}
 	}
 }
 

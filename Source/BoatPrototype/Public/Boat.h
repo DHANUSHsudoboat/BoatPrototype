@@ -118,11 +118,18 @@ protected:
 
 	// Base rate the boat speeds up toward a higher gear (cm/s^2). Weight-scaled.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Speed")
-	float AccelerationRate = 150.0f;
+	float AccelerationRate = 100.0f;
 
 	// Base rate the boat slows down toward a lower gear (cm/s^2). Weight-scaled.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Speed")
 	float DecelerationRate = 250.0f;
+
+	// Signed rate of change of CurrentSpeed this frame (cm/s^2). +ve = spooling up,
+	// -ve = throttling off. Drives the engine-attitude pitch kick (Boat|Visuals).
+	float CurrentAcceleration = 0.0f;
+
+	// CurrentSpeed as of last frame, used to derive CurrentAcceleration.
+	float PreviousSpeed = 0.0f;
 #pragma endregion
 
 #pragma region Physical
@@ -166,17 +173,58 @@ protected:
 	// Turn-induced speed loss: extra surge drag from drift + helm while maneuvering.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "0.0"))
 	float TurnDragFactor = 0.6f;
+
+	// Floor on turn-induced speed loss, as a fraction of the gear's target speed
+	// (0.9 = turning can never bleed off more than 10%). Only applies while the
+	// gear still wants forward way (skipped in gear 0, which should reach 0).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Steering", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float TurnSpeedRetentionFraction = 0.9f;
 #pragma endregion
 
 #pragma region Visuals
+	// All of these are cosmetic only -- they roll/pitch/heave HullMesh, never the
+	// root (CollisionHull), so movement/steering/collision are unaffected.
+
 	// Max hull roll (deg) at full yaw rate. The hull heels into the turn — the
-	// side it's turning toward dips. Purely cosmetic (rolls HullMesh, not the root).
+	// side it's turning toward dips.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Visuals", meta = (ClampMin = "0.0"))
 	float MaxBankAngle = 8.0f;
 
 	// How fast the hull eases toward its target roll (higher = snappier heel).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Visuals", meta = (ClampMin = "0.1"))
 	float BankResponsiveness = 4.0f;
+
+	// --- Idle floating: always active, even at a dead stop, fades out with speed. ---
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Visuals|Idle", meta = (ClampMin = "0.0"))
+	float IdleHeaveAmplitude = 3.0f; // cm, vertical bob
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Visuals|Idle", meta = (ClampMin = "0.0"))
+	float IdleHeaveFrequency = 0.4f; // Hz
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Visuals|Idle", meta = (ClampMin = "0.0"))
+	float IdlePitchAmplitude = 1.2f; // deg
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Visuals|Idle", meta = (ClampMin = "0.0"))
+	float IdleRollAmplitude = 1.0f; // deg
+
+	// --- Engine attitude: bow lifts on spool-up, dips when throttling off. ---
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Visuals|Engine", meta = (ClampMin = "0.0"))
+	float MaxEnginePitch = 4.0f; // deg, cap on the accel-driven pitch kick
+
+	// Sustained bow-up trim (deg) blended in as the boat approaches max speed.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Visuals|Engine", meta = (ClampMin = "0.0"))
+	float FullSpeedTrimPitch = 2.5f;
+
+	// High-frequency heave jitter felt at speed (cm), scales with speed.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Visuals|Engine", meta = (ClampMin = "0.0"))
+	float VibrationAmplitude = 0.4f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Visuals|Engine", meta = (ClampMin = "0.0"))
+	float VibrationFrequency = 14.0f; // Hz
+
+	// How fast pitch/heave ease toward their targets (roll reuses BankResponsiveness).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Visuals", meta = (ClampMin = "0.1"))
+	float HullMotionResponsiveness = 3.0f;
 #pragma endregion
 
 #pragma region Combat
@@ -303,8 +351,10 @@ protected:
 	// Play the gear-change camera shake. Override to add sound/FX.
 	virtual void PlayGearShake();
 
-	// Roll the visual hull to heel into the turn (cosmetic only). Called each Tick.
-	virtual void UpdateVisualBank(float DeltaTime);
+	// Compose hull heel + idle floating + engine attitude into one cosmetic
+	// transform on HullMesh (never the root). Called every Tick, even when the
+	// heavy sim (steering/movement) is asleep, so the boat is never dead-still.
+	virtual void UpdateHullVisuals(float DeltaTime);
 #pragma endregion
 
 	// -1 = left, +1 = right, 0 = straight. Set from input (the helm order).
@@ -319,14 +369,27 @@ protected:
 	// Current sway (lateral, +right) velocity (cm/s) -- the drift/sideslip of the hull.
 	float SwaySpeed = 0.0f;
 
-	// Hull's artist-set relative rotation, cached at BeginPlay. Bank rolls on top of it.
+	// Hull's artist-set relative rotation/location, cached at BeginPlay. Bank/pitch/
+	// heave apply on top of these, never replacing the art alignment.
 	FRotator HullBaseRotation = FRotator::ZeroRotator;
+	FVector HullBaseLocation = FVector::ZeroVector;
 
-	// Current smoothed hull roll (deg) — eases toward the turn-driven target.
+	// Current smoothed hull roll (deg) — eases toward the turn-driven + idle target.
 	float CurrentBank = 0.0f;
 
+	// Current smoothed hull pitch (deg) — idle rock + engine attitude combined.
+	float CurrentPitch = 0.0f;
+
+	// Current smoothed hull heave offset (cm, +up) — idle bob + speed vibration combined.
+	float CurrentHeave = 0.0f;
+
+	// Per-instance phase offset for the idle sine waves (randomized at BeginPlay so
+	// boats don't bob in lockstep).
+	float IdlePhaseOffset = 0.0f;
+
 	void WakeSimulation();
-	// Wake the sim on input; sleep it when fully parked and not turning.
+	// Named "sleep" for the heavy sim (steering/movement integration) only -- the
+	// boat always keeps ticking so idle floating never stops.
 	virtual bool ShouldSleep() const;
 	
 };

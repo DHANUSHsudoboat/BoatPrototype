@@ -27,10 +27,6 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Bullet")
 	class USphereComponent* CollisionComponent;
 
-	// Visual representation of the bullet.
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Bullet")
-	class UStaticMeshComponent* BulletMesh;
-
 	// Propels the bullet in a straight line with no gravity.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Bullet")
 	class UProjectileMovementComponent* ProjectileMovement;
@@ -42,6 +38,33 @@ protected:
 	// Damage dealt to a boat on impact (HP).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bullet", meta = (ClampMin = "0.0"))
 	float Damage = 50.0f;
+
+#pragma region VFX
+	// Niagara system played at the muzzle when fired -- a volley of these all
+	// launch together from the same point, like several cannonballs firing at once.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bullet|VFX")
+	class UNiagaraSystem* MuzzleEffect;
+
+	// How many muzzle-effect instances to spawn per shot.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bullet|VFX", meta = (ClampMin = "1"))
+	int32 MuzzleEffectCount = 5;
+
+	// Half-angle (deg) of the cone each instance's direction is randomized within.
+	// All instances spawn together at the same point; giving each a slightly
+	// different direction is what makes the volley fan out wider as it travels.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bullet|VFX", meta = (ClampMin = "0.0", ClampMax = "90.0"))
+	float MuzzleEffectSpreadAngle = 15.0f;
+
+	// How long (seconds) each spawned instance is force-deactivated/destroyed after,
+	// regardless of whether the Niagara system naturally finishes. Required for
+	// looping effects -- SpawnSystemAtLocation's auto-destroy only fires on natural
+	// completion, so a looping emitter would otherwise linger in the level forever.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bullet|VFX", meta = (ClampMin = "0.05"))
+	float MuzzleEffectLifetime = 1.5f;
+
+	// Spawns the whole volley at once (called from FireInDirection).
+	void SpawnMuzzleEffectBurst(const FVector& FireDirection);
+#pragma endregion
 
 	// Called when the bullet blocks against something (hit event).
 	UFUNCTION()

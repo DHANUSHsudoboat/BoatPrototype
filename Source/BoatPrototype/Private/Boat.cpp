@@ -114,11 +114,14 @@ void ABoat::BeginPlay()
 
 	CurrentHealth = MaxHealth;
 
-	// Remember the hull's aligned rotation so banking rolls on top of it.
+	// Remember the hull's aligned rotation/location so bank/pitch/heave apply on
+	// top of it. Randomize the idle phase so boats don't bob in lockstep.
 	if (HullMesh)
 	{
 		HullBaseRotation = HullMesh->GetRelativeRotation();
+		HullBaseLocation = HullMesh->GetRelativeLocation();
 	}
+	IdlePhaseOffset = FMath::FRandRange(0.0f, 2.0f * PI);
 
 	if (BroadsideGuideMaterial)
 	{
@@ -156,9 +159,17 @@ void ABoat::Tick(float DeltaTime)
 	Super::Tick(DeltaTime);
 
 	UpdateSpeed(DeltaTime);
-	UpdateSteering(DeltaTime);
-	UpdateVisualBank(DeltaTime);
-	UpdateMovement(DeltaTime);
+
+	// Steering/movement integration is the expensive part of the sim -- skip it
+	// once fully parked and not turning. UpdateHullVisuals always runs below so
+	// the boat keeps idle-floating even while "asleep".
+	if (!ShouldSleep())
+	{
+		UpdateSteering(DeltaTime);
+		UpdateMovement(DeltaTime);
+	}
+
+	UpdateHullVisuals(DeltaTime);
 	UpdateBroadsideGuides();
 
 	// On-screen HUD: current gear + speed.
@@ -166,12 +177,6 @@ void ABoat::Tick(float DeltaTime)
 	{
 		const FString Msg = FString::Printf(TEXT("Gear: %d   Speed: %.0f cm/s"), CurrentGear, CurrentSpeed);
 		GEngine->AddOnScreenDebugMessage(1, 0.0f, FColor::Green, Msg);
-	}
-
-	// Nothing left to simulate (parked, no target, not turning) -> stop ticking.
-	if (ShouldSleep())
-	{
-		SetActorTickEnabled(false);
 	}
 }
 
@@ -203,6 +208,11 @@ void ABoat::UpdateSpeed(float DeltaTime)
 
 	CurrentSpeed = FMath::FInterpConstantTo(CurrentSpeed, TargetSpeed, DeltaTime, Rate);
 	CurrentSpeed = FMath::Clamp(CurrentSpeed, 0.0f, MaximumSpeed);
+
+	// Signed rate of change, for the engine-attitude pitch kick (spool-up lifts the
+	// bow, throttling off dips it) -- reuses the speed we just integrated.
+	CurrentAcceleration = !FMath::IsNearlyZero(DeltaTime) ? (CurrentSpeed - PreviousSpeed) / DeltaTime : 0.0f;
+	PreviousSpeed = CurrentSpeed;
 }
 
 void ABoat::UpdateSteering(float DeltaTime)
@@ -227,9 +237,25 @@ void ABoat::UpdateSteering(float DeltaTime)
 	SwaySpeed += SwayAccel * DeltaTime;
 
 	// --- Surge feedback: centripetal +r*v, minus turn-induced speed loss. ---
+	const float SpeedBeforeTurnDrag = CurrentSpeed; // snapshot before this frame's drag term
 	const float TurnDrag = TurnDragFactor
 		* (FMath::Abs(SwaySpeed) + FMath::Abs(FMath::Sin(FMath::DegreesToRadians(RudderAngle))) * FMath::Abs(CurrentSpeed));
 	CurrentSpeed += (YawRateRad * SwaySpeed - TurnDrag) * DeltaTime;
+
+	// Turning shouldn't bleed off more than (1 - TurnSpeedRetentionFraction) of the
+	// gear's target speed -- but this must never ADD speed beyond what the normal
+	// accel ramp already reached this frame (an unconditional floor here caused a
+	// gear-up speed jump: TargetSpeed rises instantly on a gear change, and without
+	// the SpeedBeforeTurnDrag cap this would snap CurrentSpeed straight to 90% of
+	// the new target, skipping UpdateSpeed's ramp). Skipped in gear 0 (TargetSpeed 0)
+	// so the boat can still coast down to a stop normally.
+	const float TargetSpeed = GetTargetSpeed();
+	if (TargetSpeed > KINDA_SMALL_NUMBER)
+	{
+		const float TurnFloor = FMath::Min(SpeedBeforeTurnDrag, TargetSpeed * TurnSpeedRetentionFraction);
+		CurrentSpeed = FMath::Max(CurrentSpeed, TurnFloor);
+	}
+
 	CurrentSpeed = FMath::Clamp(CurrentSpeed, 0.0f, MaximumSpeed);
 
 	// --- Apply the heading change. ---
@@ -375,24 +401,53 @@ void ABoat::PlayGearShake()
 	}
 }
 
-void ABoat::UpdateVisualBank(float DeltaTime)
+void ABoat::UpdateHullVisuals(float DeltaTime)
 {
 	if (!HullMesh)
 	{
 		return;
 	}
 
-	// Roll scales with how hard we're turning (yaw rate vs the turn-in-place rate).
+	const float SpeedNorm = (MaximumSpeed > KINDA_SMALL_NUMBER)
+		? FMath::Clamp(CurrentSpeed / MaximumSpeed, 0.0f, 1.0f)
+		: 0.0f;
+	// Idle floating dominates at rest and fades out as the boat picks up way.
+	const float IdleFade = 1.0f - SpeedNorm;
+
+	// Three sine waves at different rates so heave/pitch/roll never lock-step; the
+	// per-instance IdlePhaseOffset keeps multiple boats out of sync with each other.
+	// Frequencies scale up slightly with speed -- chop feels quicker underway.
+	const float Time = GetWorld()->GetTimeSeconds() + IdlePhaseOffset;
+	const float FreqScale = 1.0f + SpeedNorm;
+	const float IdleHeave = FMath::Sin(Time * IdleHeaveFrequency * 2.0f * PI * FreqScale) * IdleHeaveAmplitude;
+	const float IdlePitch = FMath::Sin(Time * IdleHeaveFrequency * 2.0f * PI * FreqScale * 0.7f) * IdlePitchAmplitude;
+	const float IdleRoll = FMath::Sin(Time * IdleHeaveFrequency * 2.0f * PI * FreqScale * 1.3f) * IdleRollAmplitude;
+
+	// --- Roll: turn heel + idle rock (fades out with speed). ---
 	const float YawNorm = (BaseTurnRate > KINDA_SMALL_NUMBER)
 		? FMath::Clamp(YawRate / BaseTurnRate, -1.0f, 1.0f)
 		: 0.0f;
-
 	// +Roll dips the starboard side, so a right turn (YawRate > 0) heels into the turn.
-	const float TargetBank = YawNorm * MaxBankAngle;
+	const float TargetBank = YawNorm * MaxBankAngle + IdleRoll * IdleFade;
 	CurrentBank = FMath::FInterpTo(CurrentBank, TargetBank, DeltaTime, BankResponsiveness);
 
-	// Roll on top of the hull's aligned rotation — root (movement/collision) untouched.
-	HullMesh->SetRelativeRotation(HullBaseRotation + FRotator(0.0f, 0.0f, CurrentBank));
+	// --- Pitch: idle rock (fades out) + engine attitude (spool-up lifts the bow,
+	// throttling off dips it) + a sustained bow-up trim at speed. ---
+	const float EnginePitch = (GetAccelerationRate() > KINDA_SMALL_NUMBER)
+		? -FMath::Clamp(CurrentAcceleration / GetAccelerationRate(), -1.0f, 1.0f) * MaxEnginePitch
+		: 0.0f;
+	const float TargetPitch = IdlePitch * IdleFade + EnginePitch + FullSpeedTrimPitch * SpeedNorm;
+	CurrentPitch = FMath::FInterpTo(CurrentPitch, TargetPitch, DeltaTime, HullMotionResponsiveness);
+
+	// --- Heave: idle bob (fades out) + a small high-frequency vibration at speed. ---
+	const float Vibration = FMath::Sin(Time * VibrationFrequency * 2.0f * PI) * VibrationAmplitude * SpeedNorm;
+	const float TargetHeave = IdleHeave * IdleFade + Vibration;
+	CurrentHeave = FMath::FInterpTo(CurrentHeave, TargetHeave, DeltaTime, HullMotionResponsiveness);
+
+	// Apply on top of the hull's aligned base transform — root (movement/steering/
+	// collision) is never touched, this is purely cosmetic.
+	HullMesh->SetRelativeRotation(HullBaseRotation + FRotator(CurrentPitch, 0.0f, CurrentBank));
+	HullMesh->SetRelativeLocation(HullBaseLocation + FVector(0.0f, 0.0f, CurrentHeave));
 }
 
 void ABoat::SetPortGuideVisible(bool bVisible)
@@ -498,11 +553,13 @@ void ABoat::WakeSimulation()
 
 bool ABoat::ShouldSleep() const
 {
+	// Gates the heavy sim (steering/movement) only -- idle floating (UpdateHullVisuals)
+	// always runs regardless, so CurrentBank/Pitch/Heave are deliberately not checked
+	// here (they oscillate forever at rest and would defeat this gate).
 	return FMath::IsNearlyZero(CurrentSpeed)
 		&& FMath::IsNearlyZero(GetTargetSpeed())
 		&& FMath::IsNearlyZero(YawRate)
 		&& FMath::IsNearlyZero(SwaySpeed)
 		&& FMath::IsNearlyZero(RudderAngle)
-		&& FMath::IsNearlyZero(SteerInput)
-		&& FMath::IsNearlyZero(CurrentBank);
+		&& FMath::IsNearlyZero(SteerInput);
 }
