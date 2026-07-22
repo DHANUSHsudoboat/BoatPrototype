@@ -21,8 +21,12 @@ ABulletActor::ABulletActor()
 	CollisionComponent->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
 	RootComponent = CollisionComponent;
 
-	// Bind the collision event.
+	// Bind collision events. Handle both cases: targets that BLOCK the bullet
+	// (hit event) and targets that only OVERLAP it (overlap event) — otherwise a
+	// boat set to overlap would let the bullet pass through with no damage.
+	CollisionComponent->SetGenerateOverlapEvents(true);
 	CollisionComponent->OnComponentHit.AddDynamic(this, &ABulletActor::OnHit);
+	CollisionComponent->OnComponentBeginOverlap.AddDynamic(this, &ABulletActor::OnOverlap);
 
 	// Visual mesh.
 	BulletMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BulletMesh"));
@@ -33,7 +37,7 @@ ABulletActor::ABulletActor()
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> BulletMeshFinder(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
 	if (BulletMeshFinder.Succeeded())
 	{
-		BulletMesh->SetStaticMesh(BulletMeshFinder.Object);
+	BulletMesh->SetStaticMesh(BulletMeshFinder.Object);
 	}
 
 	// Projectile movement (no gravity, constant velocity).
@@ -58,18 +62,28 @@ void ABulletActor::FireInDirection(const FVector& Direction, float Range)
 
 void ABulletActor::OnHit(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit)
 {
-	// Ignore self and owner (the firing boat).
+	HandleImpact(OtherActor);
+}
+
+void ABulletActor::OnOverlap(UPrimitiveComponent* OverlappedComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& Sweep)
+{
+	HandleImpact(OtherActor);
+}
+
+void ABulletActor::HandleImpact(AActor* OtherActor)
+{
+	// Ignore self and the firing boat (the broadside spawns right beside its owner).
 	if (OtherActor == this || OtherActor == GetOwner())
 	{
 		return;
 	}
 
-	// If we hit a boat, apply damage.
+	// If we struck a boat, apply damage.
 	if (ABoat* HitBoat = Cast<ABoat>(OtherActor))
 	{
 		HitBoat->ApplyBulletHit(this, Damage);
 	}
 
-	// Destroy the bullet on any blocking hit.
+	// Consume the bullet on any impact.
 	Destroy();
 }

@@ -96,15 +96,15 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Boat|Gears", meta = (ClampMin = "0", ClampMax = "3"))
 	int32 CurrentGear = 0;
 
-	// Target speed for each gear (cm/s). Gear 0 is always 0.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Gears")
-	float Gear1Speed = 75.0f;
+	// Target speed for each gear as a percent (0-100) of MaximumSpeed. Gear 0 is always 0.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Gears", meta = (ClampMin = "0.0", ClampMax = "100.0"))
+	float Gear1Percent = 40.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Gears")
-	float Gear2Speed = 130.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Gears", meta = (ClampMin = "0.0", ClampMax = "100.0"))
+	float Gear2Percent = 70.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Gears")
-	float Gear3Speed = 200.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Gears", meta = (ClampMin = "0.0", ClampMax = "100.0"))
+	float Gear3Percent = 100.0f;
 #pragma endregion
 
 #pragma region Speed
@@ -168,11 +168,22 @@ protected:
 	float TurnDragFactor = 0.6f;
 #pragma endregion
 
+#pragma region Visuals
+	// Max hull roll (deg) at full yaw rate. The hull heels into the turn — the
+	// side it's turning toward dips. Purely cosmetic (rolls HullMesh, not the root).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Visuals", meta = (ClampMin = "0.0"))
+	float MaxBankAngle = 8.0f;
+
+	// How fast the hull eases toward its target roll (higher = snappier heel).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Visuals", meta = (ClampMin = "0.1"))
+	float BankResponsiveness = 4.0f;
+#pragma endregion
+
 #pragma region Combat
 	// Max broadside firing range (cm) — also the guide line's length. Override
 	// GetFiringRange() per subclass for different ship classes.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat", meta = (ClampMin = "0.0"))
-	float MaxFiringRange = 3000.0f;
+	float MaxFiringRange = 500.0f;
 
 	// Guide line thickness (cm).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat", meta = (ClampMin = "1.0"))
@@ -205,8 +216,16 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat|Combat")
 	float CurrentHealth = 100.0f;
 
-	
+	// Bullet class to spawn on fire. Defaults to ABulletActor; override with a
+	// Blueprint subclass for custom art.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat")
+	TSubclassOf<class ABulletActor> BulletClass;
+
+
 protected:
+	// Spawn a bullet off the given side (perpendicular to the hull), out to firing range.
+	void FireBroadside(bool bStarboardSide);
+
 	// Refresh guide mesh size/transform from current range/width. Called each Tick.
 	virtual void UpdateBroadsideGuides();
 #pragma endregion
@@ -283,6 +302,9 @@ protected:
 
 	// Play the gear-change camera shake. Override to add sound/FX.
 	virtual void PlayGearShake();
+
+	// Roll the visual hull to heel into the turn (cosmetic only). Called each Tick.
+	virtual void UpdateVisualBank(float DeltaTime);
 #pragma endregion
 
 	// -1 = left, +1 = right, 0 = straight. Set from input (the helm order).
@@ -297,8 +319,14 @@ protected:
 	// Current sway (lateral, +right) velocity (cm/s) -- the drift/sideslip of the hull.
 	float SwaySpeed = 0.0f;
 
+	// Hull's artist-set relative rotation, cached at BeginPlay. Bank rolls on top of it.
+	FRotator HullBaseRotation = FRotator::ZeroRotator;
+
+	// Current smoothed hull roll (deg) — eases toward the turn-driven target.
+	float CurrentBank = 0.0f;
+
 	void WakeSimulation();
 	// Wake the sim on input; sleep it when fully parked and not turning.
-	bool ShouldSleep() const;
+	virtual bool ShouldSleep() const;
 	
 };

@@ -2,6 +2,7 @@
 
 
 #include "BoatPrototype/Public/Boat.h"
+#include "BoatPrototype/Public/BulletActor.h"
 #include "BoatPrototype/Public/Widgets/BoatHealthWidget.h"
 
 #include "Components/StaticMeshComponent.h"
@@ -81,6 +82,30 @@ ABoat::ABoat()
 	HealthWidget->SetupAttachment(RootComponent);
 	HealthWidget->SetWidgetClass(UBoatHealthWidget::StaticClass());
 	HealthWidget->SetVisibility(true);
+
+	// Default bullet class.
+	BulletClass = ABulletActor::StaticClass();
+}
+
+void ABoat::FireBroadside(bool bStarboardSide)
+{
+	if (!BulletClass)
+	{
+		return;
+	}
+
+	const FVector FireDirection = bStarboardSide ? GetActorRightVector() : -GetActorRightVector();
+	const FVector SpawnLocation = GetActorLocation() + FireDirection * (Width * 0.5f);
+	const FRotator SpawnRotation = FireDirection.Rotation();
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Owner = this;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	if (ABulletActor* Bullet = GetWorld()->SpawnActor<ABulletActor>(BulletClass, SpawnLocation, SpawnRotation, SpawnParams))
+	{
+		Bullet->FireInDirection(FireDirection, GetFiringRange());
+	}
 }
 
 void ABoat::BeginPlay()
@@ -88,6 +113,12 @@ void ABoat::BeginPlay()
 	Super::BeginPlay();
 
 	CurrentHealth = MaxHealth;
+
+	// Remember the hull's aligned rotation so banking rolls on top of it.
+	if (HullMesh)
+	{
+		HullBaseRotation = HullMesh->GetRelativeRotation();
+	}
 
 	if (BroadsideGuideMaterial)
 	{
@@ -126,6 +157,7 @@ void ABoat::Tick(float DeltaTime)
 
 	UpdateSpeed(DeltaTime);
 	UpdateSteering(DeltaTime);
+	UpdateVisualBank(DeltaTime);
 	UpdateMovement(DeltaTime);
 	UpdateBroadsideGuides();
 
@@ -269,15 +301,17 @@ void ABoat::SteerReleased()
 
 float ABoat::GetTargetSpeed() const
 {
-	float Target = 0.0f;
+	float Percent = 0.0f;
 	switch (CurrentGear)
 	{
-	case 1: Target = Gear1Speed; break;
-	case 2: Target = Gear2Speed; break;
-	case 3: Target = Gear3Speed; break;
+	case 1: Percent = Gear1Percent; break;
+	case 2: Percent = Gear2Percent; break;
+	case 3: Percent = Gear3Percent; break;
 	default: break; // Gear 0 = full stop.
 	}
 
+	// Gears are a percent of MaximumSpeed, so changing MaximumSpeed rescales all gears.
+	const float Target = MaximumSpeed * Percent / 100.0f;
 	return FMath::Clamp(Target, 0.0f, MaximumSpeed);
 }
 
@@ -339,6 +373,26 @@ void ABoat::PlayGearShake()
 	{
 		PC->ClientStartCameraShake(GearShake, GearShakeScale);
 	}
+}
+
+void ABoat::UpdateVisualBank(float DeltaTime)
+{
+	if (!HullMesh)
+	{
+		return;
+	}
+
+	// Roll scales with how hard we're turning (yaw rate vs the turn-in-place rate).
+	const float YawNorm = (BaseTurnRate > KINDA_SMALL_NUMBER)
+		? FMath::Clamp(YawRate / BaseTurnRate, -1.0f, 1.0f)
+		: 0.0f;
+
+	// +Roll dips the starboard side, so a right turn (YawRate > 0) heels into the turn.
+	const float TargetBank = YawNorm * MaxBankAngle;
+	CurrentBank = FMath::FInterpTo(CurrentBank, TargetBank, DeltaTime, BankResponsiveness);
+
+	// Roll on top of the hull's aligned rotation — root (movement/collision) untouched.
+	HullMesh->SetRelativeRotation(HullBaseRotation + FRotator(0.0f, 0.0f, CurrentBank));
 }
 
 void ABoat::SetPortGuideVisible(bool bVisible)
@@ -449,5 +503,6 @@ bool ABoat::ShouldSleep() const
 		&& FMath::IsNearlyZero(YawRate)
 		&& FMath::IsNearlyZero(SwaySpeed)
 		&& FMath::IsNearlyZero(RudderAngle)
-		&& FMath::IsNearlyZero(SteerInput);
+		&& FMath::IsNearlyZero(SteerInput)
+		&& FMath::IsNearlyZero(CurrentBank);
 }

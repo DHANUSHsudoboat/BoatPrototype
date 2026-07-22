@@ -22,13 +22,23 @@ APlayerBoat::APlayerBoat()
 
 	// Brain that steers toward the mouse when enabled (RMB held).
 	Brain = CreateDefaultSubobject<UBoatBrainComponent>(TEXT("Brain"));
+	
 
-	// Default bullet class.
-	BulletClass = ABulletActor::StaticClass();
+}
+
+void APlayerBoat::BeginPlay()
+{
+	Super::BeginPlay();
+	MaxHealth += MaxHealth * 5;
+	CurrentHealth = MaxHealth;
 }
 
 void APlayerBoat::Tick(float DeltaTime)
 {
+	if (FireCooldown > 0.0f)
+	{
+		FireCooldown -= DeltaTime;
+	}
 	if (bIsAiming)
 	{
 		UpdateAimSideFromMouse();
@@ -105,6 +115,11 @@ void APlayerBoat::OnRightMouseReleased()
 	}
 }
 
+bool APlayerBoat::ShouldSleep() const
+{
+	return Super::ShouldSleep() && FireCooldown <= 0.0f;
+}
+
 void APlayerBoat::OnAimPressed()
 {
 	bIsAiming = true;
@@ -112,9 +127,11 @@ void APlayerBoat::OnAimPressed()
 
 void APlayerBoat::OnAimReleased()
 {
-	if (bIsAiming)
+	if (bIsAiming && FireCooldown <= 0.0f)
 	{
 		FireBroadside(bAimingStarboard);
+		FireCooldown = FireInterval;
+		WakeSimulation(); // keep ticking so the cooldown counts down even when parked
 	}
 	bIsAiming = false;
 	SetPortGuideVisible(false);
@@ -139,25 +156,4 @@ void APlayerBoat::UpdateAimSideFromMouse()
 	bAimingStarboard = FVector::DotProduct(MouseWorldPos - BoatLocation, GetActorRightVector()) > 0.0f;
 	SetStarboardGuideVisible(bAimingStarboard);
 	SetPortGuideVisible(!bAimingStarboard);
-}
-
-void APlayerBoat::FireBroadside(bool bStarboardSide)
-{
-	if (!BulletClass)
-	{
-		return;
-	}
-
-	const FVector FireDirection = bStarboardSide ? GetActorRightVector() : -GetActorRightVector();
-	const FVector SpawnLocation = GetActorLocation() + FireDirection * (Width * 0.5f);
-	const FRotator SpawnRotation = FireDirection.Rotation();
-
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.Owner = this;
-	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-	if (ABulletActor* Bullet = GetWorld()->SpawnActor<ABulletActor>(BulletClass, SpawnLocation, SpawnRotation, SpawnParams))
-	{
-		Bullet->FireInDirection(FireDirection, GetFiringRange());
-	}
 }
