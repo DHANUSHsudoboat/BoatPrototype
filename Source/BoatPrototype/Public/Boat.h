@@ -226,7 +226,7 @@ protected:
 
 	// Camera rotation at max spring arm length (deg). Typically more top-down (-90).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Camera")
-	float CameraRotationAtMaxZoom = -90.0f;
+	float CameraRotationAtMaxZoom = -75.0f;
 
 	// Adjust spring arm length by this amount per scroll wheel tick (cm).
 	UFUNCTION(BlueprintCallable, Category = "Boat|Camera")
