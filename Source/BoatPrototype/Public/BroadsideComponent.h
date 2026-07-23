@@ -7,9 +7,9 @@
 #include "BroadsideComponent.generated.h"
 
 /**
- * Which of the three fixed firing lanes a bullet belongs to. The ship art has
- * many cannons, but gameplay always resolves to exactly these three lanes -- no
- * matter how large the volley, we only ever spread across Left / Center / Right.
+ * DEPRECATED / unused: lanes are now a variable count (see NumLanes), spawned
+ * procedurally rather than the old fixed Left/Center/Right triad. Kept only to
+ * avoid churn; safe to delete in a later cleanup pass.
  */
 UENUM(BlueprintType)
 enum class EBroadsideLane : uint8
@@ -54,12 +54,19 @@ public:
 	// so if the caller's aim keeps changing across a large volley's spawn window
 	// (spread over BulletCount * ComputeInterval seconds), the first and last
 	// bullet can end up aimed at genuinely different points. Lane/muzzle
-	// selection (Left/Center/Right, ShotIndex % 3) is unaffected.
+	// selection (ShotIndex % NumLanes) is unaffected.
 	void FireVolleyLive(TFunction<FVector()> TargetProvider, bool bStarboard);
 
 	// Convenience wrapper: fire the whole volley at one fixed point.
 	UFUNCTION(BlueprintCallable, Category = "Boat|Broadside")
 	void FireVolley(const FVector& LockedTarget, bool bStarboard);
+
+	// Setup-time config (call from an owning boat's constructor /
+	// PostInitializeComponents to give a class its fixed lane layout). Not a
+	// runtime gameplay mutation. Clamped so NumLanes >= 1.
+	void SetNumLanes(int32 InNumLanes) { NumLanes = FMath::Max(1, InNumLanes); }
+	void SetBulletCount(int32 InBulletCount) { BulletCount = FMath::Max(1, InBulletCount); }
+	int32 GetNumLanes() const { return NumLanes; }
 
 	// --- Preview ----------------------------------------------------------
 
@@ -91,9 +98,18 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Broadside", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float CenterSpreadFraction = 0.04f;
 
-	// Fore/aft spacing between the three lane spawn points along the hull (cm).
+	// Fore/aft spacing between adjacent lane spawn points along the hull (cm).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Broadside", meta = (ClampMin = "0.0"))
 	float LaneSpacing = 150.0f;
+
+	// Number of firing lanes (spawn positions) per side, fixed per boat class at
+	// setup (not changed at runtime). Bullets cycle across these lanes
+	// (ShotIndex % NumLanes). Spawn points are generated procedurally along the
+	// hull, centered on the beam, spaced by LaneSpacing. Note: to use every lane,
+	// BulletCount should be >= NumLanes (higher lanes never fire otherwise) -- the
+	// two are independent tunables. Set per class via SetNumLanes.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Boat|Broadside", meta = (ClampMin = "1"))
+	int32 NumLanes = 3;
 
 	// Number of bullets in a volley. <=3 fires at BaseInterval; >3 tightens the
 	// interval toward MinInterval but still only uses the three lanes.
@@ -146,7 +162,7 @@ private:
 	// Timer callback: spawn one bullet for the current shot, advance the volley.
 	void SpawnNextBullet();
 
-	// Spawn one bullet for the given shot index (lane = index % 3). Evaluates
+	// Spawn one bullet for the given shot index (lane = index % NumLanes). Evaluates
 	// VolleyTargetProvider fresh, right here, for this shot's target.
 	void SpawnLaneBullet(int32 ShotIndex);
 

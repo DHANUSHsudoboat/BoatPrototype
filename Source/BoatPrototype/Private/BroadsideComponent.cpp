@@ -167,8 +167,9 @@ FVector UBroadsideComponent::GetSideSpawnEdge(bool bStarboard) const
 		return FVector::ZeroVector;
 	}
 
-	// Start the trajectory preview from the real Center-lane muzzle.
-	return Boat->GetLaneMuzzleLocation(bStarboard, 1);
+	// Start the trajectory preview from the center-lane muzzle (integer center
+	// for any lane count).
+	return Boat->GetLaneMuzzleLocation(bStarboard, NumLanes / 2, NumLanes, LaneSpacing);
 }
 
 void UBroadsideComponent::SpawnLaneBullet(int32 ShotIndex)
@@ -189,8 +190,8 @@ void UBroadsideComponent::SpawnLaneBullet(int32 ShotIndex)
 		return;
 	}
 
-	// Resolve the lane (only ever three), regardless of volley size.
-	const int32 LaneIdx = ShotIndex % 3;
+	// Resolve the lane (cycles across NumLanes), regardless of volley size.
+	const int32 LaneIdx = ShotIndex % FMath::Max(1, NumLanes);
 
 	// Evaluated fresh for THIS shot -- not a snapshot from when the volley
 	// started -- so a live-aiming caller can steer later bullets differently.
@@ -198,9 +199,17 @@ void UBroadsideComponent::SpawnLaneBullet(int32 ShotIndex)
 
 	// Spawn point: the designer-placed muzzle arrow for this side + lane (falls
 	// back to a procedural point off the beam if the arrow is unset).
-	const FVector SpawnLocation = Boat->GetLaneMuzzleLocation(bVolleyStarboard, LaneIdx);
+	const FVector SpawnLocation = Boat->GetLaneMuzzleLocation(bVolleyStarboard, LaneIdx, NumLanes, LaneSpacing);
 
-	const float Dist = FVector::Dist(SpawnLocation, Target);
+	// Offset THIS lane's target by the lane's own muzzle displacement from the
+	// center lane, so every bullet flies the same relative vector (parallel
+	// arcs) instead of all converging on one point. Landing spread then mirrors
+	// the muzzle layout; flight time / arc / range stay consistent across lanes.
+	const int32 CenterLane = FMath::Max(1, NumLanes) / 2;
+	const FVector CenterSpawn = Boat->GetLaneMuzzleLocation(bVolleyStarboard, CenterLane, NumLanes, LaneSpacing);
+	const FVector LaneTarget = Target + (SpawnLocation - CenterSpawn);
+
+	const float Dist = FVector::Dist(SpawnLocation, LaneTarget);
 	const float TravelTime = FMath::Max(0.1f, Dist / FMath::Max(1.0f, BulletSpeed));
 	const float ShotArcHeight = ComputeArcHeight(Dist);
 
@@ -208,10 +217,10 @@ void UBroadsideComponent::SpawnLaneBullet(int32 ShotIndex)
 	SpawnParams.Owner = Boat;
 	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-	const FRotator SpawnRotation = (Target - SpawnLocation).Rotation();
+	const FRotator SpawnRotation = (LaneTarget - SpawnLocation).Rotation();
 	if (ABulletActor* Bullet = GetWorld()->SpawnActor<ABulletActor>(BulletClass, SpawnLocation, SpawnRotation, SpawnParams))
 	{
-		Bullet->LaunchArc(SpawnLocation, Target, TravelTime, ShotArcHeight);
+		Bullet->LaunchArc(SpawnLocation, LaneTarget, TravelTime, ShotArcHeight);
 		// TEMP DIAGNOSTIC: confirms a bullet actor was actually spawned.
 		UE_LOG(LogTemp, Warning, TEXT("SpawnLaneBullet: spawned bullet for %s at %s -> %s"),
 			*Boat->GetName(), *SpawnLocation.ToString(), *Target.ToString());

@@ -90,18 +90,26 @@ ABoat::ABoat()
 	// Broadside volley engine. Owns detection/spread/cadence/spawning.
 	Broadside = CreateDefaultSubobject<UBroadsideComponent>(TEXT("Broadside"));
 
-	// Muzzle points -- three lanes per side, placed as movable arrows so a designer
-	// can drag each cannon onto the boat art in the Blueprint. Default transforms
-	// put them off each beam (~half a beam width) with a fore/aft lane spread; the
-	// arrow faces outboard. All hidden in game, no collision.
-	auto MakeMuzzle = [this](const TCHAR* Name, bool bStarboard, float ForeAft)
+	// Muzzle points -- MaxBroadsideLanes movable arrows per side under a per-side
+	// root SceneComponent. Move a root to shift the whole bank; move a child arrow
+	// to fine-tune one cannon. Default transforms fan them off each beam with a
+	// fore/aft spread; arrows face outboard, hidden in game, no collision.
+	PortMuzzleRoot = CreateDefaultSubobject<USceneComponent>(TEXT("PortMuzzleRoot"));
+	PortMuzzleRoot->SetupAttachment(RootComponent);
+	StarboardMuzzleRoot = CreateDefaultSubobject<USceneComponent>(TEXT("StarboardMuzzleRoot"));
+	StarboardMuzzleRoot->SetupAttachment(RootComponent);
+
+	auto MakeMuzzle = [this](const TCHAR* BaseName, int32 Index, bool bStarboard, USceneComponent* Parent)
 	{
-		UArrowComponent* Arrow = CreateDefaultSubobject<UArrowComponent>(Name);
-		Arrow->SetupAttachment(RootComponent);
+		const FName CompName(*FString::Printf(TEXT("%s_%d"), BaseName, Index));
+		UArrowComponent* Arrow = CreateDefaultSubobject<UArrowComponent>(CompName);
+		Arrow->SetupAttachment(Parent);
 		Arrow->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		Arrow->ArrowColor = FColor::Orange;
 		Arrow->bIsScreenSizeScaled = true;
 		const float SideY = bStarboard ? 150.0f : -150.0f; // ~half default beam (Width 300).
+		// Even fore/aft spread centered on the beam, default 150cm spacing.
+		const float ForeAft = (Index - (MaxBroadsideLanes - 1) * 0.5f) * 150.0f;
 		Arrow->SetRelativeLocation(FVector(ForeAft, SideY, 0.0f));
 		// Face outboard: +Y (starboard) = yaw 90, -Y (port) = yaw -90.
 		Arrow->SetRelativeRotation(FRotator(0.0f, bStarboard ? 90.0f : -90.0f, 0.0f));
@@ -111,44 +119,34 @@ ABoat::ABoat()
 		return Arrow;
 	};
 
-	// Lane fore/aft spread: Left fore (+X), Center mid, Right aft (-X).
-	PortMuzzleLeft        = MakeMuzzle(TEXT("PortMuzzleLeft"),        false,  150.0f);
-	PortMuzzleCenter      = MakeMuzzle(TEXT("PortMuzzleCenter"),      false,    0.0f);
-	PortMuzzleRight       = MakeMuzzle(TEXT("PortMuzzleRight"),       false, -150.0f);
-	StarboardMuzzleLeft   = MakeMuzzle(TEXT("StarboardMuzzleLeft"),   true,   150.0f);
-	StarboardMuzzleCenter = MakeMuzzle(TEXT("StarboardMuzzleCenter"), true,     0.0f);
-	StarboardMuzzleRight  = MakeMuzzle(TEXT("StarboardMuzzleRight"),  true,  -150.0f);
+	PortMuzzles.Reserve(MaxBroadsideLanes);
+	StarboardMuzzles.Reserve(MaxBroadsideLanes);
+	for (int32 i = 0; i < MaxBroadsideLanes; ++i)
+	{
+		PortMuzzles.Add(MakeMuzzle(TEXT("PortMuzzle"), i, false, PortMuzzleRoot));
+		StarboardMuzzles.Add(MakeMuzzle(TEXT("StarboardMuzzle"), i, true, StarboardMuzzleRoot));
+	}
 }
 
 UArrowComponent* ABoat::GetMuzzleArrow(bool bStarboard, int32 LaneIdx) const
 {
-	if (bStarboard)
-	{
-		switch (LaneIdx)
-		{
-		case 0:  return StarboardMuzzleLeft;
-		case 1:  return StarboardMuzzleCenter;
-		default: return StarboardMuzzleRight;
-		}
-	}
-	switch (LaneIdx)
-	{
-	case 0:  return PortMuzzleLeft;
-	case 1:  return PortMuzzleCenter;
-	default: return PortMuzzleRight;
-	}
+	const TArray<UArrowComponent*>& Muzzles = bStarboard ? StarboardMuzzles : PortMuzzles;
+	return Muzzles.IsValidIndex(LaneIdx) ? Muzzles[LaneIdx] : nullptr;
 }
 
-FVector ABoat::GetLaneMuzzleLocation(bool bStarboard, int32 LaneIdx) const
+FVector ABoat::GetLaneMuzzleLocation(bool bStarboard, int32 LaneIdx, int32 NumLanes, float LaneSpacing) const
 {
+	// Prefer the designer-placed arrow for this lane (viewport-positioned, under
+	// the side's muzzle root).
 	if (const UArrowComponent* Arrow = GetMuzzleArrow(bStarboard, LaneIdx))
 	{
 		return Arrow->GetComponentLocation();
 	}
 
-	// Fallback: procedural point off the beam with a fore/aft lane spread.
+	// Procedural fallback (lane index beyond the placed arrows): points off the
+	// beam, evenly spaced by LaneSpacing, centered on the beam.
 	const FVector SideDir = bStarboard ? GetActorRightVector() : -GetActorRightVector();
-	const float ForeAft = (LaneIdx - 1) * 150.0f;
+	const float ForeAft = (LaneIdx - (NumLanes - 1) * 0.5f) * LaneSpacing;
 	return GetActorLocation() + SideDir * (Width * 0.5f) + GetActorForwardVector() * ForeAft;
 }
 

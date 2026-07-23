@@ -35,6 +35,22 @@ void APlayerBoat::BeginPlay()
 	CurrentHealth = MaxHealth;
 }
 
+void APlayerBoat::PostInitializeComponents()
+{
+	// Runs after ABoat::PostInitializeComponents (which may rebuild Broadside
+	// via the stale-component self-heal), so apply the player's fixed lane
+	// layout here -- authoritative regardless of whether the heal fired.
+	Super::PostInitializeComponents();
+
+	if (Broadside)
+	{
+		// Player boat fields a heavy broadside: 12 lanes per side, one bullet
+		// per lane (BulletCount >= NumLanes so every lane fires).
+		Broadside->SetNumLanes(12);
+		Broadside->SetBulletCount(12);
+	}
+}
+
 void APlayerBoat::Tick(float DeltaTime)
 {
 	if (FireCooldown > 0.0f)

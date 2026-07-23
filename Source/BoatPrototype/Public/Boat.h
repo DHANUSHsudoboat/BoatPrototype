@@ -6,6 +6,9 @@
 #include "GameFramework/Pawn.h"
 #include "Boat.generated.h"
 
+class UArrowComponent;
+class USceneComponent;
+
 /**
  * Generic drivable boat pawn (turn-in-place steering + drift).
  *
@@ -70,7 +73,10 @@ public:
 	// given side. Driven by the designer-placed muzzle arrows below; falls back to
 	// a procedural point off the beam if an arrow is missing. Read by the broadside
 	// component when spawning bullets and drawing the trajectory preview.
-	FVector GetLaneMuzzleLocation(bool bStarboard, int32 LaneIdx) const;
+	// Procedural spawn point for lane LaneIdx of NumLanes on the given side:
+	// N points evenly spaced by LaneSpacing along the hull fore/aft, centered on
+	// the beam. Replaces the old fixed-arrow lookup.
+	FVector GetLaneMuzzleLocation(bool bStarboard, int32 LaneIdx, int32 NumLanes, float LaneSpacing) const;
 	FRotator GetLaneMuzzleRotation(bool bStarboard, int32 LaneIdx) const;
 
 	// Fire a broadside volley at a fixed locked world point off the given side.
@@ -121,27 +127,30 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat|Components")
 	class UWidgetComponent* HealthWidget;
 
-	// Broadside muzzle points -- one per lane (Left/Center/Right) per side. Placed
-	// as movable arrows so a designer can drag each cannon onto the boat art in the
-	// Blueprint viewport; the broadside component spawns bullets from these. Arrows
-	// (not bare scene comps) so they're visible + movable in-editor; hidden in game.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat|Muzzles")
-	class UArrowComponent* PortMuzzleLeft;
+	// Broadside muzzle points -- movable arrows a designer drags onto the boat art
+	// in the Blueprint viewport; the broadside component spawns bullets from these.
+	// MaxBroadsideLanes are pre-created per side; each boat uses the first NumLanes
+	// (enemy 3, player 12). Arrows (not bare scene comps) so they're visible +
+	// movable in-editor; hidden in game.
+	//
+	// Every lane on a side is parented to that side's root SceneComponent, so
+	// moving/rotating the root shifts the whole broadside bank at once.
+	static constexpr int32 MaxBroadsideLanes = 12;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat|Muzzles")
-	class UArrowComponent* PortMuzzleCenter;
+	// Per-side parent for all muzzle arrows on that side. Move/rotate to shift the
+	// whole bank; move individual child arrows to fine-tune a single cannon.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat|Combat|Muzzles")
+	USceneComponent* PortMuzzleRoot;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat|Muzzles")
-	class UArrowComponent* PortMuzzleRight;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat|Combat|Muzzles")
+	USceneComponent* StarboardMuzzleRoot;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat|Muzzles")
-	class UArrowComponent* StarboardMuzzleLeft;
+	// The individual lane muzzles, index 0..MaxBroadsideLanes-1, under each root.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat|Combat|Muzzles")
+	TArray<UArrowComponent*> PortMuzzles;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat|Muzzles")
-	class UArrowComponent* StarboardMuzzleCenter;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat|Muzzles")
-	class UArrowComponent* StarboardMuzzleRight;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat|Combat|Muzzles")
+	TArray<UArrowComponent*> StarboardMuzzles;
 #pragma endregion
 
 #pragma region Gears
