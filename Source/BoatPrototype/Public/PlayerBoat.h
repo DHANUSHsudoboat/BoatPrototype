@@ -39,7 +39,14 @@ protected:
 
 	void OnRightMousePressed();
 	void OnRightMouseReleased();
-	void UpdateAimSideFromMouse();
+
+	// Refresh the aim each frame while LMB is held: always free-aim from the mouse
+	// (no auto-lock -- that's an enemy-only behaviour). Draws the dotted trajectory
+	// preview and updates the live target every frame.
+	void UpdateAiming();
+
+	// Deproject the mouse onto the boat's Z-plane. False if it can't be resolved.
+	bool GetMouseWorldPointOnBoatPlane(FVector& OutWorld) const;
 
 	bool bIsAiming = false;
 	bool bAimingStarboard = false;

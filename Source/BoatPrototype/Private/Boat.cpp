@@ -3,6 +3,7 @@
 
 #include "BoatPrototype/Public/Boat.h"
 #include "BoatPrototype/Public/BulletActor.h"
+#include "BoatPrototype/Public/BroadsideComponent.h"
 #include "BoatPrototype/Public/Widgets/BoatHealthWidget.h"
 
 #include "Components/StaticMeshComponent.h"
@@ -85,26 +86,130 @@ ABoat::ABoat()
 
 	// Default bullet class.
 	BulletClass = ABulletActor::StaticClass();
+
+	// Broadside volley engine. Owns detection/spread/cadence/spawning.
+	Broadside = CreateDefaultSubobject<UBroadsideComponent>(TEXT("Broadside"));
+
+	// Muzzle points -- three lanes per side, placed as movable arrows so a designer
+	// can drag each cannon onto the boat art in the Blueprint. Default transforms
+	// put them off each beam (~half a beam width) with a fore/aft lane spread; the
+	// arrow faces outboard. All hidden in game, no collision.
+	auto MakeMuzzle = [this](const TCHAR* Name, bool bStarboard, float ForeAft)
+	{
+		UArrowComponent* Arrow = CreateDefaultSubobject<UArrowComponent>(Name);
+		Arrow->SetupAttachment(RootComponent);
+		Arrow->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Arrow->ArrowColor = FColor::Orange;
+		Arrow->bIsScreenSizeScaled = true;
+		const float SideY = bStarboard ? 150.0f : -150.0f; // ~half default beam (Width 300).
+		Arrow->SetRelativeLocation(FVector(ForeAft, SideY, 0.0f));
+		// Face outboard: +Y (starboard) = yaw 90, -Y (port) = yaw -90.
+		Arrow->SetRelativeRotation(FRotator(0.0f, bStarboard ? 90.0f : -90.0f, 0.0f));
+#if WITH_EDITORONLY_DATA
+		Arrow->bHiddenInGame = true;
+#endif
+		return Arrow;
+	};
+
+	// Lane fore/aft spread: Left fore (+X), Center mid, Right aft (-X).
+	PortMuzzleLeft        = MakeMuzzle(TEXT("PortMuzzleLeft"),        false,  150.0f);
+	PortMuzzleCenter      = MakeMuzzle(TEXT("PortMuzzleCenter"),      false,    0.0f);
+	PortMuzzleRight       = MakeMuzzle(TEXT("PortMuzzleRight"),       false, -150.0f);
+	StarboardMuzzleLeft   = MakeMuzzle(TEXT("StarboardMuzzleLeft"),   true,   150.0f);
+	StarboardMuzzleCenter = MakeMuzzle(TEXT("StarboardMuzzleCenter"), true,     0.0f);
+	StarboardMuzzleRight  = MakeMuzzle(TEXT("StarboardMuzzleRight"),  true,  -150.0f);
+}
+
+UArrowComponent* ABoat::GetMuzzleArrow(bool bStarboard, int32 LaneIdx) const
+{
+	if (bStarboard)
+	{
+		switch (LaneIdx)
+		{
+		case 0:  return StarboardMuzzleLeft;
+		case 1:  return StarboardMuzzleCenter;
+		default: return StarboardMuzzleRight;
+		}
+	}
+	switch (LaneIdx)
+	{
+	case 0:  return PortMuzzleLeft;
+	case 1:  return PortMuzzleCenter;
+	default: return PortMuzzleRight;
+	}
+}
+
+FVector ABoat::GetLaneMuzzleLocation(bool bStarboard, int32 LaneIdx) const
+{
+	if (const UArrowComponent* Arrow = GetMuzzleArrow(bStarboard, LaneIdx))
+	{
+		return Arrow->GetComponentLocation();
+	}
+
+	// Fallback: procedural point off the beam with a fore/aft lane spread.
+	const FVector SideDir = bStarboard ? GetActorRightVector() : -GetActorRightVector();
+	const float ForeAft = (LaneIdx - 1) * 150.0f;
+	return GetActorLocation() + SideDir * (Width * 0.5f) + GetActorForwardVector() * ForeAft;
+}
+
+FRotator ABoat::GetLaneMuzzleRotation(bool bStarboard, int32 LaneIdx) const
+{
+	if (const UArrowComponent* Arrow = GetMuzzleArrow(bStarboard, LaneIdx))
+	{
+		return Arrow->GetComponentRotation();
+	}
+	const FVector SideDir = bStarboard ? GetActorRightVector() : -GetActorRightVector();
+	return SideDir.Rotation();
 }
 
 void ABoat::FireBroadside(bool bStarboardSide)
 {
-	if (!BulletClass)
-	{
-		return;
-	}
-
+	// Default fire with no explicit lock: aim straight off the beam at max range.
+	// Callers with a real target (the player) use FireVolleyAt() instead.
 	const FVector FireDirection = bStarboardSide ? GetActorRightVector() : -GetActorRightVector();
-	const FVector SpawnLocation = GetActorLocation() + FireDirection * (Width * 0.5f);
-	const FRotator SpawnRotation = FireDirection.Rotation();
+	const FVector LockedTarget = GetActorLocation() + FireDirection * (Width * 0.5f + GetFiringRange());
+	FireVolleyAt(LockedTarget, bStarboardSide);
+}
 
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.Owner = this;
-	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+void ABoat::FireVolleyAt(const FVector& LockedTarget, bool bStarboard)
+{
+	FireVolleyLive([LockedTarget]() { return LockedTarget; }, bStarboard);
+}
 
-	if (ABulletActor* Bullet = GetWorld()->SpawnActor<ABulletActor>(BulletClass, SpawnLocation, SpawnRotation, SpawnParams))
+void ABoat::FireVolleyLive(TFunction<FVector()> TargetProvider, bool bStarboard)
+{
+	if (Broadside)
 	{
-		Bullet->FireInDirection(FireDirection, GetFiringRange());
+		// TEMP DIAGNOSTIC: confirms firing actually reaches the component.
+		UE_LOG(LogTemp, Warning, TEXT("ABoat::FireVolleyLive: %s forwarding to Broadside, bStarboard=%d"),
+			*GetName(), bStarboard ? 1 : 0);
+		Broadside->FireVolleyLive(MoveTemp(TargetProvider), bStarboard);
+	}
+	else
+	{
+		// TEMP DIAGNOSTIC: confirms whether the null-Broadside hypothesis is why
+		// firing produces no bullets.
+		UE_LOG(LogTemp, Warning, TEXT("ABoat::FireVolleyLive: Broadside is NULL on %s -- no bullet spawned"), *GetName());
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(2003, 3.0f, FColor::Red,
+				FString::Printf(TEXT("FireVolleyLive: Broadside is NULL on %s -- no bullet spawned"), *GetName()));
+		}
+	}
+}
+
+void ABoat::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+
+	// Guard against a stale Blueprint serialization where the instanced Broadside
+	// pointer still resolves to the class-default template (Owner == Default__Boat,
+	// no world). Rebuild a correctly-owned, registered instance component so
+	// GetWorld()/GetOwner() resolve on the live actor.
+	if (!Broadside || Broadside->GetOwner() != this)
+	{
+		Broadside = NewObject<UBroadsideComponent>(this, TEXT("Broadside"));
+		Broadside->RegisterComponent();
 	}
 }
 
@@ -446,7 +551,7 @@ void ABoat::UpdateHullVisuals(float DeltaTime)
 
 	// Apply on top of the hull's aligned base transform — root (movement/steering/
 	// collision) is never touched, this is purely cosmetic.
-	HullMesh->SetRelativeRotation(HullBaseRotation + FRotator(CurrentPitch, 0.0f, CurrentBank));
+	HullMesh->SetRelativeRotation(HullBaseRotation + FRotator(CurrentPitch+CurrentBank, 0.0f, 0.0f));
 	HullMesh->SetRelativeLocation(HullBaseLocation + FVector(0.0f, 0.0f, CurrentHeave));
 }
 

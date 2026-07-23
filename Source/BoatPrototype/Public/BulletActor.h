@@ -19,8 +19,16 @@ class BOATPROTOTYPE_API ABulletActor : public AActor
 public:
 	ABulletActor();
 
+	virtual void Tick(float DeltaTime) override;
+
 	// Launch the bullet along Direction; self-destruct once it has traveled Range.
+	// Straight-line path via the projectile movement component (legacy/back-compat).
 	void FireInDirection(const FVector& Direction, float Range);
+
+	// Launch the bullet on a manual arc from Start to Target over TravelTime,
+	// rising InArcHeight at the apex. No ProjectileMovement physics -- position is
+	// interpolated each Tick (Lerp + sin arc). This is the broadside flight path.
+	void LaunchArc(const FVector& Start, const FVector& Target, float TravelTime, float InArcHeight);
 
 protected:
 	// Sphere collision, root component, triggers OnHit when it hits something.
@@ -76,4 +84,16 @@ protected:
 
 	// Shared impact resolution: damage a boat, then destroy the bullet. Ignores self/owner.
 	void HandleImpact(AActor* OtherActor);
+
+#pragma region Arc Movement
+	// Whether the manual arc flight is active (set by LaunchArc). While true, Tick
+	// drives the transform and ProjectileMovement is left inactive.
+	bool bArcActive = false;
+
+	FVector ArcStart = FVector::ZeroVector;
+	FVector ArcTarget = FVector::ZeroVector;
+	float ArcTravelTime = 1.0f;
+	float ArcHeight = 150.0f;
+	float ArcElapsed = 0.0f;
+#pragma endregion
 };

@@ -53,8 +53,39 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Boat|Combat")
 	FORCEINLINE float GetHealthPercent() const { return (MaxHealth > KINDA_SMALL_NUMBER) ? FMath::Clamp(CurrentHealth / MaxHealth, 0.0f, 1.0f) : 0.0f; }
 
+	// Firing range (cm). Override per ship class. Public so the broadside
+	// component and aim code can read it.
+	virtual float GetFiringRange() const { return MaxFiringRange; }
+
+	// Hull beam / width (cm). Read by the broadside component's area detection.
+	FORCEINLINE float GetBeamWidth() const { return Width; }
+
+	// Guide strip thickness (cm). Read by the broadside component's area detection.
+	FORCEINLINE float GetBroadsideGuideThickness() const { return BroadsideGuideWidth; }
+
+	// Bullet class this boat fires. Read by the broadside component when spawning.
+	FORCEINLINE TSubclassOf<class ABulletActor> GetBulletClass() const { return BulletClass; }
+
+	// World-space muzzle transform for a lane (0=Left,1=Center,2=Right) on the
+	// given side. Driven by the designer-placed muzzle arrows below; falls back to
+	// a procedural point off the beam if an arrow is missing. Read by the broadside
+	// component when spawning bullets and drawing the trajectory preview.
+	FVector GetLaneMuzzleLocation(bool bStarboard, int32 LaneIdx) const;
+	FRotator GetLaneMuzzleRotation(bool bStarboard, int32 LaneIdx) const;
+
+	// Fire a broadside volley at a fixed locked world point off the given side.
+	// Convenience wrapper around FireVolleyLive for callers with one static target.
+	void FireVolleyAt(const FVector& LockedTarget, bool bStarboard);
+
+	// Fire a broadside volley whose target is re-resolved at EACH bullet's own
+	// spawn moment (not a snapshot at fire time) -- so a moving aim source (mouse,
+	// or a moving enemy) can steer later bullets in the volley differently from
+	// the first. Not a UFUNCTION: TFunction isn't UHT-reflectable.
+	void FireVolleyLive(TFunction<FVector()> TargetProvider, bool bStarboard);
+
 protected:
 	virtual void BeginPlay() override;
+	virtual void PostInitializeComponents() override;
 
 #pragma region Components
 	// Pawn root. Movement + steering act on this; the camera and arrow ride it.
@@ -89,6 +120,28 @@ protected:
 	// Health display widget mounted on the boat.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat|Components")
 	class UWidgetComponent* HealthWidget;
+
+	// Broadside muzzle points -- one per lane (Left/Center/Right) per side. Placed
+	// as movable arrows so a designer can drag each cannon onto the boat art in the
+	// Blueprint viewport; the broadside component spawns bullets from these. Arrows
+	// (not bare scene comps) so they're visible + movable in-editor; hidden in game.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat|Muzzles")
+	class UArrowComponent* PortMuzzleLeft;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat|Muzzles")
+	class UArrowComponent* PortMuzzleCenter;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat|Muzzles")
+	class UArrowComponent* PortMuzzleRight;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat|Muzzles")
+	class UArrowComponent* StarboardMuzzleLeft;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat|Muzzles")
+	class UArrowComponent* StarboardMuzzleCenter;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat|Muzzles")
+	class UArrowComponent* StarboardMuzzleRight;
 #pragma endregion
 
 #pragma region Gears
@@ -254,8 +307,10 @@ protected:
 	UFUNCTION(BlueprintCallable, Category = "Boat|Combat")
 	void SetStarboardGuideVisible(bool bVisible);
 
-	// Override for different ship classes' firing range.
-	virtual float GetFiringRange() const { return MaxFiringRange; }
+	// Broadside volley engine (detection, spread, cadence, spawning). Shared by
+	// player + enemy; keeps firing logic modular and off this actor.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat|Combat")
+	class UBroadsideComponent* Broadside;
 
 	// Max health (HP).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Combat", meta = (ClampMin = "1.0"))
@@ -386,6 +441,9 @@ protected:
 	// Per-instance phase offset for the idle sine waves (randomized at BeginPlay so
 	// boats don't bob in lockstep).
 	float IdlePhaseOffset = 0.0f;
+
+	// Resolve the muzzle arrow for a side + lane (0=Left,1=Center,2=Right). Null if unset.
+	class UArrowComponent* GetMuzzleArrow(bool bStarboard, int32 LaneIdx) const;
 
 	void WakeSimulation();
 	// Named "sleep" for the heavy sim (steering/movement integration) only -- the

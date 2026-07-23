@@ -11,7 +11,9 @@
 
 ABulletActor::ABulletActor()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	// Tick drives the manual arc flight (broadside path). Straight-line legacy
+	// shots via FireInDirection still use the projectile movement component.
+	PrimaryActorTick.bCanEverTick = true;
 
 	// Sphere collision, root component.
 	CollisionComponent = CreateDefaultSubobject<USphereComponent>(TEXT("CollisionComponent"));
@@ -48,7 +50,63 @@ void ABulletActor::FireInDirection(const FVector& Direction, float Range)
 		SetLifeSpan(FMath::Max(0.1f, Range / Speed));
 	}
 
-	SpawnMuzzleEffectBurst(Direction.GetSafeNormal());
+	// TODO(Niagara): re-enable muzzle burst here.
+	// SpawnMuzzleEffectBurst(Direction.GetSafeNormal());
+}
+
+void ABulletActor::LaunchArc(const FVector& Start, const FVector& Target, float TravelTime, float InArcHeight)
+{
+	ArcStart = Start;
+	ArcTarget = Target;
+	ArcTravelTime = FMath::Max(0.1f, TravelTime);
+	ArcHeight = InArcHeight;
+	ArcElapsed = 0.0f;
+	bArcActive = true;
+
+	// The arc is driven manually in Tick -- keep the projectile movement out of it.
+	if (ProjectileMovement)
+	{
+		ProjectileMovement->StopMovementImmediately();
+		ProjectileMovement->Deactivate();
+	}
+
+	SetActorLocation(Start);
+	// Safety net in case the impact is somehow missed.
+	SetLifeSpan(ArcTravelTime + 1.0f);
+
+	// TODO(Niagara): spawn muzzle burst at Start here.
+}
+
+void ABulletActor::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+
+	if (!bArcActive)
+	{
+		return;
+	}
+
+	ArcElapsed += DeltaTime;
+	const float Alpha = FMath::Clamp(ArcElapsed / ArcTravelTime, 0.0f, 1.0f);
+
+	// Manual interpolation: straight-line Lerp plus a sine arc for height. No
+	// gravity/physics -- deterministic flight from spawn to the assigned target.
+	FVector NewPos = FMath::Lerp(ArcStart, ArcTarget, Alpha);
+	NewPos.Z += ArcHeight * FMath::Sin(PI * Alpha);
+
+	// Swept move so a mid-flight overlap/hit still fires OnHit / OnOverlap.
+	SetActorLocation(NewPos, true);
+
+	// TODO(Niagara): spawn/advance the trail effect each tick here.
+
+	if (Alpha >= 1.0f)
+	{
+		// Reached the target without striking anything en route -- resolve at the
+		// landing point (splash) and consume the bullet.
+		bArcActive = false;
+		// TODO(Niagara): spawn splash effect at ArcTarget here.
+		Destroy();
+	}
 }
 
 void ABulletActor::SpawnMuzzleEffectBurst(const FVector& FireDirection)

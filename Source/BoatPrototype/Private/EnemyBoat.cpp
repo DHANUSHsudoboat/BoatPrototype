@@ -77,7 +77,17 @@ void AEnemyBoat::Tick(float DeltaTime)
 			&& Aligned > FMath::Cos(FMath::DegreesToRadians(FireAngleTolerance))
 			&& FireCooldown <= 0.0f)
 		{
-			FireBroadside(bFireStarboard);
+			// Enemy already has its target (the player) -- fire an arced volley that
+			// re-reads the player's position at EACH bullet's own spawn moment, so a
+			// large volley keeps tracking the player instead of aiming at where they
+			// were when the burst started. Weak pointer: the volley can outlive this
+			// frame by a couple seconds, and the player pawn could be gone by then.
+			TWeakObjectPtr<ABoat> WeakPlayer(Player);
+			FireVolleyLive([WeakPlayer]() -> FVector
+			{
+				const ABoat* LivePlayer = WeakPlayer.Get();
+				return LivePlayer ? LivePlayer->GetActorLocation() : FVector::ZeroVector;
+			}, bFireStarboard);
 			FireCooldown = FireInterval;
 		}
 
